@@ -20,6 +20,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.execution.datasources.hbase.{HBaseRelation => ShcRelation}
 import org.apache.spark.sql.execution.datasources.hbase.{HBaseTableCatalog => ShcCatalog}
+import org.apache.spark.sql.types.StructField
 import org.apache.spark.sql.types.StructType
 import org.slf4j.LoggerFactory
 
@@ -29,6 +30,7 @@ import com.dimajix.flowman.execution.Executor
 import com.dimajix.flowman.spec.schema.EmbeddedSchema
 import com.dimajix.flowman.spec.schema.Schema
 import com.dimajix.flowman.types.Field
+import com.dimajix.flowman.types.StringType
 import com.dimajix.flowman.types.FieldType
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
@@ -90,7 +92,7 @@ class HBaseRelation extends BaseRelation {
       * @return
       */
     override def schema(implicit context: Context) : Schema = {
-        val fields = columns.map(c => Field(c.alias, c.dtype, description=c.description))
+        val fields = Field(rowKey, StringType, nullable = false) +: columns.map(c => Field(c.alias, c.dtype, description=c.description))
         EmbeddedSchema(fields)
     }
 
@@ -157,6 +159,24 @@ class HBaseRelation extends BaseRelation {
       */
     override def migrate(executor: Executor): Unit = ???
 
+    /**
+      * Return null, because SHC does not support explicit schemas on read
+      * @param context
+      * @return
+      */
+    override protected def inputSchema(implicit context:Context) : StructType = null
+
+    /**
+      * Creates a Spark schema from the list of fields. The list is used for output operations, i.e. for writing
+      * @param context
+      * @return
+      */
+    override protected def outputSchema(implicit context:Context) : StructType = {
+        val fields = StructField(rowKey, org.apache.spark.sql.types.StringType, nullable = false) +:
+            columns.map(c => StructField(c.alias, c.dtype.sparkType))
+        StructType(fields)
+    }
+
     private def hbaseOptions(implicit context: Context) = {
         val keySpec = Seq(s""""$rowKey":{"cf":"rowkey", "col":"$rowKey", "type":"string"}""")
         val fieldSpec = columns.map(col => s""""${col.alias}":{"cf":"${col.family}", "col":"${col.column}", "type":"${col.dtype.sqlType}"}""")
@@ -173,6 +193,5 @@ class HBaseRelation extends BaseRelation {
             ShcRelation.HBASE_CONFIGFILE -> "/etc/hbase/conf/hbase-site.xml",
             ShcCatalog.newTable -> "5"
         )
-
     }
 }
