@@ -32,6 +32,7 @@
         <args4j.version>2.33</args4j.version>
         <joda.version>2.9.4</joda.version>
         <avro.version>1.7.7</avro.version>
+        <kafka.version>0.10.0.1</kafka.version>
         <jackson.version>2.6.7</jackson.version>
         <jackson_asl.version>1.9.13</jackson_asl.version>
         <json.version>20180130</json.version>
@@ -344,12 +345,7 @@
                 <groupId>com.dimajix.flowman</groupId>
                 <artifactId>flowman-testing</artifactId>
                 <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.dimajix.flowman</groupId>
-                <artifactId>flowman-plugin-example</artifactId>
-                <version>${project.version}</version>
+                <scope>test</scope>
             </dependency>
 
             <dependency>
@@ -425,6 +421,30 @@
                 <groupId>org.apache.spark</groupId>
                 <artifactId>spark-sql-kafka-0-10_${scala.api_version}</artifactId>
                 <version>${spark.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.spark</groupId>
+                <artifactId>spark-core_${scala.api_version}</artifactId>
+                <version>${spark.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.spark</groupId>
+                <artifactId>spark-catalyst_${scala.api_version}</artifactId>
+                <version>${spark.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.spark</groupId>
+                <artifactId>spark-sql_${scala.api_version}</artifactId>
+                <version>${spark.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
             </dependency>
 
             <dependency>
@@ -614,6 +634,18 @@
                 <artifactId>hbase-testing-util</artifactId>
                 <version>${hbase.version}</version>
                 <scope>test</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>${kafka.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka_${scala.api_version}</artifactId>
+                <version>${kafka.version}</version>
             </dependency>
 
             <dependency>

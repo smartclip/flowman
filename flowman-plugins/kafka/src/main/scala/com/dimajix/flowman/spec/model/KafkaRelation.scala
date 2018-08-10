@@ -16,20 +16,41 @@
 
 package com.dimajix.flowman.spec.model
 
+import scala.collection.immutable.Nil
+
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.streaming.OutputMode
 import org.apache.spark.sql.streaming.StreamingQuery
+import org.apache.spark.sql.types.StructField
 import org.apache.spark.sql.types.StructType
 import org.slf4j.LoggerFactory
 
 import com.dimajix.flowman.annotation.RelationType
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Executor
+import com.dimajix.flowman.spec.schema.EmbeddedSchema
+import com.dimajix.flowman.spec.schema.Schema
+import com.dimajix.flowman.types.BinaryType
+import com.dimajix.flowman.types.Field
 import com.dimajix.flowman.types.FieldValue
+import com.dimajix.flowman.types.IntegerType
+import com.dimajix.flowman.types.LongType
 import com.dimajix.flowman.types.SingleValue
+import com.dimajix.flowman.types.StringType
+import com.dimajix.flowman.types.TimestampType
 import com.dimajix.flowman.util.SchemaUtils
+
+
+object KafkaRelation {
+    def apply(hosts:Seq[String], topics:Seq[String]): KafkaRelation = {
+        val relation = new KafkaRelation()
+        relation._hosts = hosts
+        relation._topics = topics
+        relation
+    }
+}
 
 
 @RelationType(kind="kafka")
@@ -45,6 +66,24 @@ class KafkaRelation extends BaseRelation {
     def topics(implicit context:Context) : Seq[String] = _topics.map(context.evaluate)
     def startOffset(implicit context: Context) : String = context.evaluate(_startOffset)
     def endOffset(implicit context: Context) : String = context.evaluate(_endOffset)
+
+    /**
+      * Returns the schema of the relation
+      * @param context
+      * @return
+      */
+    override def schema(implicit context: Context) : Schema = {
+        val fields =
+            Field("key", BinaryType, nullable = true) ::
+            Field("value", BinaryType, nullable = false) ::
+            Field("topic", StringType, nullable = false) ::
+            Field("partition", IntegerType, nullable = false) ::
+            Field("offset", LongType, nullable = false) ::
+            Field("timestamp", TimestampType, nullable = false) ::
+            Field("timestampType", IntegerType, nullable = false) ::
+            Nil
+        EmbeddedSchema(fields)
+    }
 
     /**
       * Reads data from the relation, possibly from specific partitions
@@ -89,7 +128,7 @@ class KafkaRelation extends BaseRelation {
         this.writer(executor, df)
             .format("kafka")
             .mode(mode)
-            .option("subscribe", topic)
+            .option("topic", topic)
             .option("kafka.bootstrap.servers", hosts)
             .save()
     }
@@ -108,7 +147,7 @@ class KafkaRelation extends BaseRelation {
         val topics = this.topics.mkString(",")
         logger.info(s"Streaming from Kafka topics '$topics' at hosts '$hosts'")
 
-        val reader = this.streamReader(executor)
+        val reader = executor.spark.readStream.options(options)
             .format("kafka")
             .option("subscribe", topics)
             .option("kafka.bootstrap.servers", hosts)
@@ -126,8 +165,15 @@ class KafkaRelation extends BaseRelation {
       * @return
       */
     override def writeStream(executor: Executor, df: DataFrame, mode: OutputMode, checkpointLocation: Path): StreamingQuery = {
+        implicit val context = executor.context
+        val hosts = this.hosts.mkString(",")
+        val topic = this.topics.headOption.getOrElse(throw new IllegalArgumentException(s"Missing field 'topic' in relation '$name'"))
+        logger.info(s"Streaming to Kafka topic '$topic' at hosts '$hosts'")
+
         val writer = this.streamWriter(executor, df, mode, checkpointLocation)
            .format("kafka")
+            .option("topic", topic)
+            .option("kafka.bootstrap.servers", hosts)
         writer.start()
     }
 
@@ -160,7 +206,17 @@ class KafkaRelation extends BaseRelation {
       * @param context
       * @return
       */
-    override protected def inputSchema(implicit context: Context): StructType = null
+    override protected def inputSchema(implicit context: Context): StructType = {
+        StructType(Seq(
+            StructField("key", org.apache.spark.sql.types.BinaryType),
+            StructField("value", org.apache.spark.sql.types.BinaryType),
+            StructField("topic", org.apache.spark.sql.types.StringType),
+            StructField("partition", org.apache.spark.sql.types.IntegerType),
+            StructField("offset", org.apache.spark.sql.types.LongType),
+            StructField("timestamp", org.apache.spark.sql.types.TimestampType),
+            StructField("timestampType", org.apache.spark.sql.types.IntegerType)
+        ))
+    }
 
     /**
       * Returns empty schema, so we write columns as they are given to Kafka
