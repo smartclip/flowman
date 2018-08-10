@@ -17,49 +17,29 @@
 package com.dimajix.flowman.spec.model
 
 import java.sql.Connection
-import java.sql.PreparedStatement
-import java.util.Locale
 import java.util.Properties
 
-import scala.util.control.NonFatal
 import scala.collection.JavaConverters._
+import scala.util.control.NonFatal
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.execution.datasources.jdbc.JDBCOptions
-import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils
-import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils.getCommonJDBCType
-import org.apache.spark.sql.jdbc.JdbcDialect
+import org.apache.spark.sql.execution.datasources.jdbc.{JdbcUtils => SparkJdbcUtils}
 import org.apache.spark.sql.jdbc.JdbcDialects
-import org.apache.spark.sql.jdbc.JdbcType
 import org.apache.spark.sql.streaming.OutputMode
 import org.apache.spark.sql.streaming.StreamingQuery
-import org.apache.spark.sql.types.ArrayType
-import org.apache.spark.sql.types.BinaryType
-import org.apache.spark.sql.types.BooleanType
-import org.apache.spark.sql.types.ByteType
-import org.apache.spark.sql.types.DataType
-import org.apache.spark.sql.types.DateType
-import org.apache.spark.sql.types.DecimalType
-import org.apache.spark.sql.types.DoubleType
-import org.apache.spark.sql.types.FloatType
-import org.apache.spark.sql.types.IntegerType
-import org.apache.spark.sql.types.LongType
-import org.apache.spark.sql.types.ShortType
-import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.types.TimestampType
 import org.slf4j.LoggerFactory
 
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Executor
 import com.dimajix.flowman.spec.ConnectionIdentifier
 import com.dimajix.flowman.spec.connection.JdbcConnection
-import com.dimajix.flowman.spec.model.JdbcRelation.JDBCSink
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
+import com.dimajix.flowman.util.JdbcUtils
 import com.dimajix.flowman.util.SchemaUtils
 
 
@@ -67,22 +47,20 @@ object JdbcRelation {
     private val logger = LoggerFactory.getLogger(classOf[JdbcRelation])
 
     private class JDBCSink(url: String, parameters: Map[String, String], rddSchema:StructType) extends org.apache.spark.sql.ForeachWriter[org.apache.spark.sql.Row] {
-        private type JDBCValueSetter = (PreparedStatement, Row, Int) => Unit
+        private val options = new JDBCOptions(parameters)
+        private val batchSize = options.batchSize
+        private val dialect = JdbcDialects.get(url)
+        @transient private lazy val factory = SparkJdbcUtils.createConnectionFactory(options)
+        private val tableSchema = determineTableSchema()
+        private val statement = SparkJdbcUtils.getInsertStatement(options.table, rddSchema, tableSchema, false, dialect)
+        private val isolationLevel = determineIsolationLevel()
+        private val supportsTransactions = isolationLevel != Connection.TRANSACTION_NONE
 
-        val options = new JDBCOptions(parameters)
-        val batchSize = options.batchSize
-        val dialect = JdbcDialects.get(url)
-        @transient lazy val factory = JdbcUtils.createConnectionFactory(options)
-        val tableSchema = determineTableSchema()
-        val statement = JdbcUtils.getInsertStatement(options.table, rddSchema, tableSchema, false, dialect)
-        val isolationLevel = determineIsolationLevel()
-        val supportsTransactions = isolationLevel != Connection.TRANSACTION_NONE
-
-        @transient var conn:java.sql.Connection = _
-        @transient var stmt:java.sql.PreparedStatement = _
-        @transient var setters:Seq[JDBCValueSetter] = Seq()
-        @transient var nullTypes:Seq[Int] = Seq()
-        @transient var rowCount = 0
+        @transient private var conn:java.sql.Connection = _
+        @transient private var stmt:java.sql.PreparedStatement = _
+        @transient private var setters:Seq[JdbcUtils.JDBCValueSetter] = Seq()
+        @transient private var nullTypes:Seq[Int] = Seq()
+        @transient private var rowCount = 0
 
         def open(partitionId: Long, version: Long):Boolean = {
             conn = factory()
@@ -91,8 +69,8 @@ object JdbcRelation {
                 conn.setTransactionIsolation(isolationLevel)
             }
             stmt = conn.prepareStatement(statement)
-            setters = rddSchema.fields.map(f => makeSetter(conn, dialect, f.dataType))
-            nullTypes = rddSchema.fields.map(f => getJdbcType(f.dataType, dialect).jdbcNullType)
+            setters = rddSchema.fields.map(f => JdbcUtils.getSetter(conn, dialect, f.dataType))
+            nullTypes = rddSchema.fields.map(f => JdbcUtils.getJdbcType(dialect, f.dataType).jdbcNullType)
             rowCount = 0
             true
         }
@@ -144,81 +122,9 @@ object JdbcRelation {
             conn = null
         }
 
-        private def getJdbcType(dt: DataType, dialect: JdbcDialect): JdbcType = {
-            dialect.getJDBCType(dt).orElse(getCommonJDBCType(dt)).getOrElse(
-                throw new IllegalArgumentException(s"Can't get JDBC type for ${dt.catalogString}"))
-        }
-
-        private def makeSetter(conn: Connection,
-                  dialect: JdbcDialect,
-                  dataType: DataType): JDBCValueSetter = dataType match {
-            case IntegerType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setInt(pos + 1, row.getInt(pos))
-
-            case LongType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setLong(pos + 1, row.getLong(pos))
-
-            case DoubleType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setDouble(pos + 1, row.getDouble(pos))
-
-            case FloatType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setFloat(pos + 1, row.getFloat(pos))
-
-            case ShortType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setInt(pos + 1, row.getShort(pos))
-
-            case ByteType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setInt(pos + 1, row.getByte(pos))
-
-            case BooleanType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setBoolean(pos + 1, row.getBoolean(pos))
-
-            case StringType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setString(pos + 1, row.getString(pos))
-
-            case BinaryType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setBytes(pos + 1, row.getAs[Array[Byte]](pos))
-
-            case TimestampType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setTimestamp(pos + 1, row.getAs[java.sql.Timestamp](pos))
-
-            case DateType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setDate(pos + 1, row.getAs[java.sql.Date](pos))
-
-            case t: DecimalType =>
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    stmt.setBigDecimal(pos + 1, row.getDecimal(pos))
-
-            case ArrayType(et, _) =>
-                // remove type length parameters from end of type name
-                val typeName = getJdbcType(et, dialect).databaseTypeDefinition
-                    .toLowerCase(Locale.ROOT).split("\\(")(0)
-                (stmt: PreparedStatement, row: Row, pos: Int) =>
-                    val array = conn.createArrayOf(
-                        typeName,
-                        row.getSeq[AnyRef](pos).toArray)
-                    stmt.setArray(pos + 1, array)
-
-            case _ =>
-                (_: PreparedStatement, _: Row, pos: Int) =>
-                    throw new IllegalArgumentException(
-                        s"Can't translate non-null value for field $pos")
-        }
-
         private def determineTableSchema() : Option[StructType] = {
             val con = factory()
-            val result = JdbcUtils.getSchemaOption(con, options)
+            val result = SparkJdbcUtils.getSchemaOption(con, options)
             con.close()
             result
         }
@@ -263,6 +169,8 @@ object JdbcRelation {
 
 
 class JdbcRelation extends SchemaRelation {
+    import com.dimajix.flowman.spec.model.JdbcRelation.JDBCSink
+
     private val logger = LoggerFactory.getLogger(classOf[JdbcRelation])
 
     @JsonProperty(value="connection") private var _connection: String = _
