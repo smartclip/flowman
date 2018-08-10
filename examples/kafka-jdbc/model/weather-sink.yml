@@ -1,0 +1,6 @@
+relations:
+  weather_sink:
+    kind: jdbc
+    connection: weather_db
+    database: weather
+    table: measurement

@@ -1,0 +1,7 @@
+outputs:
+  weather:
+    kind: stream
+    input: weather_source
+    target: weather_sink
+    mode: append
+    checkpointLocation: "${project.basedir}/checkpoint"

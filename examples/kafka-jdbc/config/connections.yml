@@ -1,0 +1,7 @@
+connections:
+  weather_db:
+    kind: jdbc
+    driver: "${weather_db_driver}"
+    url: "${weather_db_url}"
+    username: "${weather_db_username}"
+    password: "${weather_db_password}"

@@ -1,0 +1,11 @@
+relations:
+  weather_source:
+    kind: kafka
+    hosts: ${kafka_hosts}
+    topics: ${weather_topic}
+
+
+mappings:
+  weather_source:
+    kind: read-stream
+    source: weather_source

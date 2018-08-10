@@ -170,11 +170,11 @@ class KafkaRelation extends BaseRelation {
         val topic = this.topics.headOption.getOrElse(throw new IllegalArgumentException(s"Missing field 'topic' in relation '$name'"))
         logger.info(s"Streaming to Kafka topic '$topic' at hosts '$hosts'")
 
-        val writer = this.streamWriter(executor, df, mode, checkpointLocation)
+        this.streamWriter(executor, df, mode, checkpointLocation)
            .format("kafka")
             .option("topic", topic)
             .option("kafka.bootstrap.servers", hosts)
-        writer.start()
+            .start()
     }
 
     /**

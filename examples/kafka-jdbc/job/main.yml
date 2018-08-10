@@ -1,0 +1,9 @@
+jobs:
+  main:
+    description: "Main job"
+    tasks:
+      - kind: show-environment
+      - kind: output
+        description: Streams all data from Kafka to SQL Server
+        outputs:
+          - weather

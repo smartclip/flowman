@@ -1,0 +1,8 @@
+environment:
+  - kafka_hosts=kafka:9092
+  - weather_topic=weather
+  - weather_db_driver=org.apache.derby.jdbc.EmbeddedDriver
+  - weather_db_url=/logdb;create=true
+  - weather_db_username=weather
+  - weather_db_password=weather
+

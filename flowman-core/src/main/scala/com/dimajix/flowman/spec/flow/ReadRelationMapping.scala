@@ -31,8 +31,8 @@ import com.dimajix.flowman.types.SingleValue
 import com.dimajix.flowman.util.SchemaUtils
 
 
-class InputMapping extends BaseMapping {
-    private val logger = LoggerFactory.getLogger(classOf[InputMapping])
+class ReadRelationMapping extends BaseMapping {
+    private val logger = LoggerFactory.getLogger(classOf[ReadRelationMapping])
 
     @JsonProperty(value = "source", required = true) private var _source:String = _
     @JsonProperty(value = "columns", required=false) private var _columns:Map[String,String] = _

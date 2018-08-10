@@ -1,0 +1,8 @@
+name: "kafka-jdbc"
+version: "1.0"
+
+modules:
+ - job
+ - config
+ - model
+ - output

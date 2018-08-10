@@ -51,8 +51,12 @@ class ValidateCommand extends ActionCommand {
                 else
                     project.outputs.filter(_._2.enabled).keys.toSeq
 
-            val tables = outputNames.map(project.outputs).flatMap(_.dependencies)
-            tables.forall(table => executor.instantiate(table) != null)
+            outputNames.forall { name =>
+                logger.info(s"Validating mappings of output '$name'")
+                val output = project.outputs(name)
+                val tables = output.dependencies
+                tables.forall(table => executor.instantiate(table) != null)
+            }
         } match {
             case Success(true) =>
                 logger.info("Successfully validated outputs")
