@@ -32,7 +32,7 @@ import com.dimajix.flowman.types.SingleValue
 import com.dimajix.flowman.util.SchemaUtils
 
 
-class JdbcRelation extends BaseRelation {
+class JdbcRelation extends SchemaRelation {
     private val logger = LoggerFactory.getLogger(classOf[JdbcRelation])
 
     @JsonProperty(value="connection") private var _connection: String = _

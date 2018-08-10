@@ -71,10 +71,9 @@ object HBaseRelation {
 
 
 @RelationType(kind = "hbase")
-class HBaseRelation extends Relation {
+class HBaseRelation extends BaseRelation {
     private val logger = LoggerFactory.getLogger(classOf[HBaseRelation])
 
-    @JsonProperty(value="description", required = false) private var _description: String = _
     @JsonProperty(value="namespace", required = true) private var _namespace:String = "default"
     @JsonProperty(value="table", required = true) private var _table:String = _
     @JsonProperty(value="rowKey", required = true) private var _rowKey:String = _
@@ -84,13 +83,6 @@ class HBaseRelation extends Relation {
     def table(implicit context: Context) : String = context.evaluate(_table)
     def rowKey(implicit context: Context) : String = context.evaluate(_rowKey)
     def columns(implicit context: Context) : Seq[HBaseRelation.Column] = _columns
-
-    /**
-      * Returns a description for the relation
-      * @param context
-      * @return
-      */
-    override def description(implicit context: Context) : String = context.evaluate(_description)
 
     /**
       * Returns the schema of the relation
@@ -115,8 +107,7 @@ class HBaseRelation extends Relation {
         logger.info(s"Reading from HBase table '$namespace.$table'")
 
         val options = hbaseOptions
-        val df = executor.spark
-            .read
+        val df = this.reader(executor)
             .options(options)
             .format("org.apache.spark.sql.execution.datasources.hbase")
             .load()
@@ -136,7 +127,7 @@ class HBaseRelation extends Relation {
         logger.info(s"Writing to HBase table '$namespace.$table'")
 
         val options = hbaseOptions
-        df.write
+        this.writer(executor, df)
             .options(options)
             .mode(mode)
             .format("org.apache.spark.sql.execution.datasources.hbase")

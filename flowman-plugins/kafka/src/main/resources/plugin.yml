@@ -1,0 +1,6 @@
+name: ${plugin.name}
+description: Flowman Kafka plugin
+version: ${plugin.version}
+isolation: false
+jars:
+ - ${plugin.jar}
