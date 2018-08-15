@@ -76,6 +76,14 @@
                                     <classifier>bin</classifier>
                                     <outputDirectory>target</outputDirectory>
                                 </artifactItem>
+                                <artifactItem>
+                                    <groupId>com.dimajix.flowman</groupId>
+                                    <artifactId>flowman-plugin-jdbc</artifactId>
+                                    <version>${project.version}</version>
+                                    <type>tar.gz</type>
+                                    <classifier>bin</classifier>
+                                    <outputDirectory>target</outputDirectory>
+                                </artifactItem>
                             </artifactItems>
                         </configuration>
                     </execution>
@@ -121,6 +129,11 @@
         <dependency>
             <groupId>com.dimajix.flowman</groupId>
             <artifactId>flowman-plugin-kafka</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.dimajix.flowman</groupId>
+            <artifactId>flowman-plugin-jdbc</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

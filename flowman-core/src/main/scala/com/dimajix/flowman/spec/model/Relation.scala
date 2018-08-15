@@ -49,7 +49,6 @@ object Relation extends ExtensionRegistry[Relation] {
   */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "kind")
 @JsonSubTypes(value = Array(
-    new JsonSubTypes.Type(name = "jdbc", value = classOf[JdbcRelation]),
     new JsonSubTypes.Type(name = "table", value = classOf[HiveTableRelation]),
     new JsonSubTypes.Type(name = "view", value = classOf[HiveViewRelation]),
     new JsonSubTypes.Type(name = "hive-table", value = classOf[HiveTableRelation]),

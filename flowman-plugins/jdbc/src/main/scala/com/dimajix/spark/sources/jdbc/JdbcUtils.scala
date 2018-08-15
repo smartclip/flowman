@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.dimajix.flowman.util
+package com.dimajix.spark.sources.jdbc
 
 import java.sql.Connection
 import java.sql.PreparedStatement
