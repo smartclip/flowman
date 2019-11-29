@@ -16,15 +16,39 @@
 
 package com.dimajix.flowman.tools.admin
 
+import java.io.PrintStream
+
 import org.kohsuke.args4j.CmdLineParser
+
+import com.dimajix.flowman.execution.Session
+
 
 abstract class NestedCommand extends Command {
     var command:Command
 
-    override def execute(options:Arguments) : Boolean = {
+    /**
+      * Returns true if a help message is requested
+      * @return
+      */
+    override def help : Boolean = _help || (command != null && command.help)
+
+    /**
+      * Prints a context-aware help message
+      */
+    override def printHelp(out:PrintStream = System.err) : Unit = {
+        if (command != null) {
+            command.printHelp(out)
+        }
+        else {
+            new CmdLineParser(this).printUsage(out)
+            out.println
+        }
+    }
+
+
+    override def execute(session: Session) : Boolean = {
         if (help || command == null) {
-            new CmdLineParser(if (command != null) command else this).printUsage(System.err)
-            System.err.println
+            printHelp()
             System.exit(1)
         }
 

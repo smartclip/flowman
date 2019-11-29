@@ -16,6 +16,8 @@
 
 package com.dimajix.flowman.tools.admin
 
+import java.io.PrintStream
+
 import scala.collection.JavaConversions._
 
 import org.kohsuke.args4j.Argument
@@ -26,22 +28,45 @@ import org.kohsuke.args4j.spi.SubCommand
 import org.kohsuke.args4j.spi.SubCommandHandler
 import org.kohsuke.args4j.spi.SubCommands
 
+import com.dimajix.flowman.tools.admin.history.HistoryCommand
 
-class Arguments(args:Array[String]) extends NestedCommand {
+
+class Arguments(args:Array[String]) {
+    @Option(name = "-h", aliases=Array("--help"), usage = "show help", help=true)
+    var _help: Boolean = false
+    @Option(name = "-P", aliases=Array("--profile"), usage = "activate profile with specified name", metaVar = "<profile>")
+    var profiles: Array[String] = Array()
+    @Option(name = "-D", aliases=Array("--env"), usage = "set environment variables which can be accessed inside config", metaVar = "<key=value>")
+    var environment: Array[String] = Array()
+    @Option(name = "--conf", usage = "set a Flowman or Spark config", metaVar = "<confname>=<value>")
+    var config: Array[String] = Array()
     @Option(name = "--info", usage = "dump configuration information")
     var info: Boolean = false
-    @Option(name = "--spark-logging", usage = "sets the log level for Spark", metaVar = "<spark_logging>")
-    var sparkLogging: String = "WARN"
-    @Option(name = "--spark-name", usage = "sets the Spark job name", metaVar = "<job_name>")
-    var sparkName: String = "datatool"
-    @Option(name = "--spark-conf", usage = "sets a Spark config", metaVar = "<confname>=<value>")
-    var sparkConfig: Array[String] = Array()
 
     @Argument(required=false,index=0,metaVar="group",usage="the object to work with",handler=classOf[SubCommandHandler])
     @SubCommands(Array(
-        //new SubCommand(name="namespace",impl=classOf[NamespaceCommand])
+        new SubCommand(name="history",impl=classOf[HistoryCommand])
     ))
-    override var command:Command = _
+    var command:Command = _
+
+    /**
+      * Returns true if a help message is requested
+      * @return
+      */
+    def help : Boolean = _help || command == null || command.help
+
+    /**
+      * Prints a context-aware help message
+      */
+    def printHelp(out:PrintStream = System.err) : Unit = {
+        if (command != null) {
+            command.printHelp(out)
+        }
+        else {
+            new CmdLineParser(this).printUsage(out)
+            out.println
+        }
+    }
 
     parseArgs(args)
 
@@ -52,17 +77,10 @@ class Arguments(args:Array[String]) extends NestedCommand {
         }
         catch {
             case e: CmdLineException => {
-                System.err.println(e.getMessage)
                 e.getParser.printUsage(System.err)
                 System.err.println
-                System.exit(1)
+                throw e
             }
         }
-    }
-
-    override def execute(options: Arguments): Boolean = {
-        super.execute(options)
-
-        command.execute(options)
     }
 }

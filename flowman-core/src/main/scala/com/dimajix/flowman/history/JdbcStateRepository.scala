@@ -181,6 +181,37 @@ private[history] class JdbcStateRepository(connection: JdbcStateStore.Connection
         Await.result(query, Duration.Inf)
     }
 
+    def listNamespaces() : Seq[String] = {
+        val query = jobRuns
+            .map(_.namespace)
+            .distinct
+        Await.result(db.run(query.result), Duration.Inf)
+    }
+
+    def listProjects(namespace:String) : Seq[String] = {
+        val query = jobRuns
+            .filter(_.namespace === namespace)
+            .map(_.project)
+            .distinct
+        Await.result(db.run(query.result), Duration.Inf)
+    }
+
+    def listJobs(namespace:String, project:String) : Seq[String] = {
+        val query = jobRuns
+            .filter(r => r.namespace === namespace && r.project === project)
+            .map(_.job)
+            .distinct
+        Await.result(db.run(query.result), Duration.Inf)
+    }
+
+    def listTargets(namespace:String, project:String) : Seq[String] = {
+        val query = targetRuns
+            .filter(r => r.namespace === namespace && r.project === project)
+            .map(_.target)
+            .distinct
+        Await.result(db.run(query.result), Duration.Inf)
+    }
+
     def getJobState(run:JobRun) : Option[JobState] = {
         val latestId = jobRuns
             .filter(r => r.namespace === run.namespace

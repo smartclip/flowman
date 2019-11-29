@@ -24,6 +24,30 @@ import com.dimajix.flowman.spec.target.TargetInstance
 
 class NullStateStore extends StateStore {
     /**
+     * Returns a list of all namespaces for which jobs runs have been recorded
+     * @return
+     */
+    override def listNamespaces() : Seq[String] = Seq()
+
+    /**
+     * Returns a list of all project names for which jobs runs have been recorded
+     * @return
+     */
+    override def listProjects(namespace:String) : Seq[String] = Seq()
+
+    /**
+     * Returns a list of all job names of a specific project which have been recorded
+     * @return
+     */
+    override def listJobs(namespace:String, project:String) : Seq[String] = Seq()
+
+    /**
+     * Returns a list of all target names of a specific project which have been recorded
+     * @return
+     */
+    override def listTargets(namespace:String, project:String) : Seq[String] = Seq()
+
+    /**
       * Returns the state of a batch
       * @param batch
       * @return

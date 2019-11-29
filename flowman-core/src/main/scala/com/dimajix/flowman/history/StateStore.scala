@@ -29,6 +29,30 @@ abstract class TargetToken
 
 abstract class StateStore {
     /**
+     * Returns a list of all namespaces for which jobs runs have been recorded
+     * @return
+     */
+    def listNamespaces() : Seq[String]
+
+    /**
+     * Returns a list of all project names for which jobs runs have been recorded
+     * @return
+     */
+    def listProjects(namespace:String) : Seq[String]
+
+    /**
+     * Returns a list of all job names of a specific project which have been recorded
+     * @return
+     */
+    def listJobs(namespace:String, project:String) : Seq[String]
+
+    /**
+     * Returns a list of all target names of a specific project which have been recorded
+     * @return
+     */
+    def listTargets(namespace:String, project:String) : Seq[String]
+
+    /**
       * Returns the state of a job, or None if no information is available
       * @param job
       * @return

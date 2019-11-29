@@ -16,18 +16,41 @@
 
 package com.dimajix.flowman.tools.admin
 
+import java.io.PrintStream
+
 import org.kohsuke.args4j.CmdLineParser
 import org.kohsuke.args4j.Option
 
+import com.dimajix.flowman.execution.Session
+
 
 abstract class Command {
-    @Option(name = "-h", aliases=Array("--help"), usage = "show help")
-    var help: Boolean = false
+    @Option(name = "-h", aliases=Array("--help"), usage = "show help", help=true)
+    var _help: Boolean = false
 
-    def execute(options:Arguments) : Boolean = {
+    /**
+      * Returns true if the command line is incomplete
+      * @return
+      */
+    def incomplete : Boolean = false
+
+    /**
+      * Returns true if a help message is requested or required
+      * @return
+      */
+    def help : Boolean = _help
+
+    /**
+      * Prints a context-aware help message
+      */
+    def printHelp(out:PrintStream = System.err) : Unit = {
+        new CmdLineParser(this).printUsage(out)
+        out.println
+    }
+
+    def execute(session: Session) : Boolean = {
         if (help) {
-            new CmdLineParser(this).printUsage(System.err)
-            System.err.println
+            printHelp()
             System.exit(1)
         }
 

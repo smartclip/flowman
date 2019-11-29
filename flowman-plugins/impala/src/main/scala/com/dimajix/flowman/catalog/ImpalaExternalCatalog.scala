@@ -149,7 +149,7 @@ class ImpalaExternalCatalog(connection:ImpalaExternalCatalog.Connection) extends
                 fn
             } catch {
                 case e @(_:SQLRecoverableException|_:SQLTransientException) if n > 1 => {
-                    logger.error("Retrying after error while executing SQL: {}", e.getMessage)
+                    logger.warn("Retrying after error while executing SQL: {}", e.getMessage)
                     Thread.sleep(connection.timeout)
                     retry(n - 1)(fn)
                 }

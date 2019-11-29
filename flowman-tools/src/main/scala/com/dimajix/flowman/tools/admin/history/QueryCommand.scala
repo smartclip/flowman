@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 Kaya Kupferschmidt
+ * Copyright 2019 Kaya Kupferschmidt
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-package com.dimajix.flowman.tools.control.env
+package com.dimajix.flowman.tools.admin.history
 
-class AddCommand {
+import com.dimajix.flowman.execution.Session
+import com.dimajix.flowman.tools.admin.Command
 
+
+class QueryCommand extends Command {
+    override def execute(session: Session): Boolean = ???
 }

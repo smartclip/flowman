@@ -55,6 +55,38 @@ class JdbcStateStore(connection:JdbcStateStore.Connection, retries:Int=3, timeou
     private val logger = LoggerFactory.getLogger(classOf[JdbcStateStore])
 
     /**
+     * Returns a list of all namespaces for which jobs runs have been recorded
+     * @return
+     */
+    override def listNamespaces() : Seq[String] = withSession { repository =>
+        repository.listNamespaces()
+    }
+
+    /**
+     * Returns a list of all project names for which jobs runs have been recorded
+     * @return
+     */
+    override def listProjects(namespace:String) : Seq[String] = withSession { repository =>
+        repository.listProjects(namespace)
+    }
+
+    /**
+     * Returns a list of all job names of a specific project which have been recorded
+     * @return
+     */
+    override def listJobs(namespace:String, project:String) : Seq[String] = withSession { repository =>
+        repository.listJobs(namespace, project)
+    }
+
+    /**
+     * Returns a list of all target names of a specific project which have been recorded
+     * @return
+     */
+    override def listTargets(namespace:String, project:String) : Seq[String] = withSession { repository =>
+        repository.listTargets(namespace, project)
+    }
+
+    /**
       * Returns the state of a job, or None if no information is available
       * @param job
       * @return
@@ -230,7 +262,7 @@ class JdbcStateStore(connection:JdbcStateStore.Connection, retries:Int=3, timeou
                 fn
             } catch {
                 case e @(_:SQLRecoverableException|_:SQLTransientException) if n > 1 => {
-                    logger.error("Retrying after error while executing SQL: {}", e.getMessage)
+                    logger.warn("Retrying after error while executing SQL: {}", e.getMessage)
                     Thread.sleep(timeout)
                     retry(n - 1)(fn)
                 }
