@@ -134,6 +134,13 @@ trait Target extends Instance {
     def requires(phase:Phase) : Set[ResourceIdentifier]
 
     /**
+     * Returns a list of mappings required by this target
+     *
+     * @return
+     */
+    def mappings(phase: Phase): Set[MappingOutputIdentifier]
+
+    /**
      * Returns the state of the target, specifically of any artifacts produces. If this method return [[Yes]],
      * then an [[execute]] should update the output, such that the target is not 'dirty' any more.
      * @param execution
@@ -209,6 +216,12 @@ abstract class BaseTarget extends AbstractInstance with Target {
      */
     override def requires(phase: Phase): Set[ResourceIdentifier] = Set()
 
+    /**
+     * Returns a list of mappings required by this target
+     *
+     * @return
+     */
+    override def mappings(phase: Phase): Set[MappingOutputIdentifier] = Set()
 
     /**
      * Returns the state of the target, specifically of any artifacts produces. If this method return [[Yes]],
