@@ -154,6 +154,9 @@ JAVA_HOME=/path/to/jdk-17 mvn clean package -Pspark-4.1 -DskipTests
 JAVA_HOME=/path/to/jdk-17 mvn clean package -Pspark-4.2 -DskipTests
 ```
 
+The Spark 4.2 preview distribution does not include the Delta Lake plugin. Delta 4.3.0 is built for Spark 4.1 and is
+not binary-compatible with Spark 4.2-preview5.
+
 
 ### Building for specific Java Version
 

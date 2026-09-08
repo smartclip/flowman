@@ -179,6 +179,7 @@
         <flowman.version>${project.version}</flowman.version>
         <flowman.dist.suffix>-${hadoop.dist}-spark${spark-api.version}-hadoop${hadoop-api.version}</flowman.dist.suffix>
         <flowman.dist.label>${project.version}${flowman.dist.suffix}</flowman.dist.label>
+        <flowman.plugin.delta>- flowman-delta</flowman.plugin.delta>
 
         <!-- Language versions -->
         <java.version>17</java.version>
@@ -1232,6 +1233,7 @@
                 <spark.version>4.2.0-preview5</spark.version>
                 <spark-api.version>4.2</spark-api.version>
                 <spark-source.version>4.0</spark-source.version>
+                <flowman.plugin.delta># flowman-delta is unavailable for Spark 4.2-preview5</flowman.plugin.delta>
                 <hive.version>2.3.9</hive.version>
                 <hive-storage-api.version>2.8.1</hive-storage-api.version>
                 <kafka.version>3.9.2</kafka.version>

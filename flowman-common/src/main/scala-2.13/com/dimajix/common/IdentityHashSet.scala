@@ -26,49 +26,55 @@ import scala.jdk.CollectionConverters._
 
 class IdentityHashSet[A] private(underlying: java.util.Set[A]) extends Set[A] {
     def this() = this(Collections.newSetFromMap(new util.IdentityHashMap[A, java.lang.Boolean]()))
-    
+
+    private def copyUnderlying(): java.util.Set[A] = {
+        val result = Collections.newSetFromMap(new util.IdentityHashMap[A, java.lang.Boolean]())
+        result.addAll(underlying)
+        result
+    }
+
     def incl(elem: A): IdentityHashSet[A] = {
-        val result = new IdentityHashSet[A](new util.HashSet[A](underlying))
+        val result = new IdentityHashSet[A](copyUnderlying())
         result.addOne(elem)
         result
     }
-    
+
     def excl(elem: A): IdentityHashSet[A] = {
-        val result = new IdentityHashSet[A](new util.HashSet[A](underlying))
+        val result = new IdentityHashSet[A](copyUnderlying())
         result.subtractOne(elem)
         result
     }
-    
+
     override def contains(elem: A): Boolean = underlying.contains(elem)
-    
+
     override def iterator: Iterator[A] = underlying.asScala.iterator
-    
+
     override def addOne(elem: A): this.type = {
         underlying.add(elem)
         this
     }
-    
+
     override def subtractOne(elem: A): this.type = {
         underlying.remove(elem)
         this
     }
-    
+
     override def clear(): Unit = underlying.clear()
-    
+
     override def size: Int = underlying.size()
-    
+
     def diff(that: Set[A]): Set[A] = {
-        val result = new IdentityHashSet[A](new util.HashSet[A](underlying))
+        val result = new IdentityHashSet[A](copyUnderlying())
         that.foreach(result.subtractOne)
         result
     }
-    
-    override def clone(): IdentityHashSet[A] = new IdentityHashSet[A](new util.HashSet[A](underlying))
+
+    override def clone(): IdentityHashSet[A] = new IdentityHashSet[A](copyUnderlying())
 }
 
 
 object IdentityHashSet {
     def empty[A]: IdentityHashSet[A] = new IdentityHashSet[A]()
-    
+
     def apply[A](): IdentityHashSet[A] = empty[A]
 }

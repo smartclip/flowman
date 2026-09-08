@@ -46,10 +46,16 @@
                                 <resource>
                                     <directory>.</directory>
                                     <includes>
-                                        <include>conf/**/*</include>
                                         <include>libexec/**/*</include>
                                     </includes>
                                     <filtering>false</filtering>
+                                </resource>
+                                <resource>
+                                    <directory>.</directory>
+                                    <includes>
+                                        <include>conf/**/*</include>
+                                    </includes>
+                                    <filtering>true</filtering>
                                 </resource>
                                 <resource>
                                     <directory>..</directory>
@@ -128,14 +134,6 @@
                                 <artifactItem>
                                     <groupId>com.dimajix.flowman</groupId>
                                     <artifactId>flowman-plugin-impala</artifactId>
-                                    <version>${project.version}</version>
-                                    <type>tar.gz</type>
-                                    <classifier>bin</classifier>
-                                    <outputDirectory>${project.build.directory}</outputDirectory>
-                                </artifactItem>
-                                <artifactItem>
-                                    <groupId>com.dimajix.flowman</groupId>
-                                    <artifactId>flowman-plugin-delta</artifactId>
                                     <version>${project.version}</version>
                                     <type>tar.gz</type>
                                     <classifier>bin</classifier>
@@ -290,6 +288,48 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>with-delta</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>unpack-delta-plugin</id>
+                                <phase>process-sources</phase>
+                                <goals>
+                                    <goal>unpack</goal>
+                                </goals>
+                                <configuration>
+                                    <artifactItems>
+                                        <artifactItem>
+                                            <groupId>com.dimajix.flowman</groupId>
+                                            <artifactId>flowman-plugin-delta</artifactId>
+                                            <version>${project.version}</version>
+                                            <type>tar.gz</type>
+                                            <classifier>bin</classifier>
+                                            <outputDirectory>${project.build.directory}</outputDirectory>
+                                        </artifactItem>
+                                    </artifactItems>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <!-- Activating this profile disables the active-by-default with-delta profile. -->
+            <id>spark-4.2</id>
+        </profile>
+    </profiles>
 
     <dependencies>
         <dependency>

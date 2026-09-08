@@ -129,6 +129,15 @@
             </properties>
         </profile>
         <profile>
+            <id>spark-4.0</id>
+            <properties>
+                <delta.version>4.0.0</delta.version>
+                <delta.artifact>delta-spark</delta.artifact>
+                <!-- Delta 4.0 uses the same change-column API adapter as Delta 4.2. -->
+                <delta-source.version>4.1</delta-source.version>
+            </properties>
+        </profile>
+        <profile>
             <id>spark-4.1</id>
             <activation>
                 <activeByDefault>true</activeByDefault>
