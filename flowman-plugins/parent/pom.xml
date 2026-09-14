@@ -129,6 +129,14 @@
                 <scope>provided</scope>
             </dependency>
 
+            <!-- Scala libraries supplied by the main Flowman distribution -->
+            <dependency>
+                <groupId>org.scala-lang.modules</groupId>
+                <artifactId>scala-parallel-collections_2.13</artifactId>
+                <version>1.2.0</version>
+                <scope>provided</scope>
+            </dependency>
+
             <!-- Netty -->
             <dependency>
                 <groupId>io.netty</groupId>

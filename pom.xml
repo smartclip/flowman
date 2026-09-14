@@ -70,7 +70,7 @@
         <commons-logging.version>1.1.3</commons-logging.version>
         <commons-net.version>3.1</commons-net.version>
         <commons-pool.version>1.5.4</commons-pool.version>
-        <commons-validator.version>1.6</commons-validator.version>
+        <commons-validator.version>1.10.1</commons-validator.version>
         <h2.version>2.1.210</h2.version>
         <jackson_asl.version>1.9.13</jackson_asl.version>
         <junit.version>5.8.2</junit.version>
@@ -135,6 +135,7 @@
         <jakarta.ws.rs-api.scope>provided</jakarta.ws.rs-api.scope>
         <jakarta.xml.bind-api.version>2.3.2</jakarta.xml.bind-api.version>
         <jakarta.xml.bind-api.scope>provided</jakarta.xml.bind-api.scope>
+        <jaxb-api.version>2.2.12</jaxb-api.version>
         <javassist.version>3.30.2-GA</javassist.version>
         <jaxb-runtime.version>2.3.2</jaxb-runtime.version>
         <jaxb-runtime.scope>provided</jaxb-runtime.scope>
@@ -164,7 +165,6 @@
 
         <!-- Non-Spark library versions -->
         <pure.commons-lang3.version>3.20.0</pure.commons-lang3.version>
-        <pure.commons-validator.version>1.10.1</pure.commons-validator.version>
         <pure.gson.version>2.13.2</pure.gson.version>
         <pure.log4j.version>2.25.3</pure.log4j.version>
         <pure.velocity.version>2.4.1</pure.velocity.version>
@@ -2693,6 +2693,11 @@
                 <artifactId>jakarta.xml.bind-api</artifactId>
                 <version>${jakarta.xml.bind-api.version}</version>
                 <scope>${jakarta.xml.bind-api.scope}</scope>
+            </dependency>
+            <dependency>
+                <groupId>javax.xml.bind</groupId>
+                <artifactId>jaxb-api</artifactId>
+                <version>${jaxb-api.version}</version>
             </dependency>
 
             <dependency>
