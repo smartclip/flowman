@@ -27,6 +27,7 @@ import org.apache.spark.sql.util.QueryExecutionListener
 
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
+import com.dimajix.flowman.metric.ObservationMetric
 import com.dimajix.flowman.metric.Selector
 import com.dimajix.flowman.metric.SettableGaugeMetric
 import com.dimajix.flowman.model.BaseMapping
@@ -65,37 +66,56 @@ final case class ObserveMapping(
 
         val df = input(this.input)
         val exprs = measures.toSeq.map { case (name, e) => expr(e).as(name) }
-        val result = SparkShim.observe(df, observationName, exprs.head, exprs.tail:_*)
 
-        // Already add metrics in advance
-        val metrics = execution.metricSystem
-        val labels = this.metadata.asMap
-        val metricMap = measures.keys.map { name =>
-            name -> metrics.findMetric(Selector(name, labels))
-                .headOption
-                .collect { case x:SettableGaugeMetric => x }
-                .getOrElse {
-                    val metric = SettableGaugeMetric(name, labels)
-                    metrics.addMetric(metric)
-                    metric
-                }
-            }.toMap
+        if (df.sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession") {
+            // A Spark Connect client has no access to QueryExecution or QueryExecutionListener, so the observed
+            // metrics have to be obtained from a client-side Observation directly. Each Observation resolves its
+            // promise once the observed DataFrame is executed, and the resulting metrics are read lazily from it
+            val metrics = execution.metricSystem
+            val labels = this.metadata.asMap
+            val observations = measures.keys.map(name => name -> new org.apache.spark.sql.Observation(observationName + "-" + name)).toMap
+            val observed = measures.toSeq.foldLeft(df) { case (acc, (name, e)) =>
+                acc.observe(observations(name), expr(e).as(name))
+            }
+            measures.keys.foreach { name =>
+                metrics.addMetric(ObservationMetric(name, labels, observations(name), name))
+            }
 
-        // Create listener for fetching the metrics
-        val listener = new QueryExecutionListener {
-            override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
-                publishMetrics(qe, observationName, metricMap)
-            }
-            override def onFailure(funcName: String, qe: QueryExecution, exception: Exception): Unit = {
-                publishMetrics(qe, observationName, metricMap)
-            }
+            Map("main" -> observed)
         }
-        result.sparkSession.listenerManager.register(listener)
+        else {
+            val result = SparkShim.observe(df, observationName, exprs.head, exprs.tail:_*)
 
-        // Register listener for cleanup when the DataFrame is to be garbage collected
-        execution.cleaner.registerQueryExecutionListener(result, listener)
+            // Already add metrics in advance
+            val metrics = execution.metricSystem
+            val labels = this.metadata.asMap
+            val metricMap = measures.keys.map { name =>
+                name -> metrics.findMetric(Selector(name, labels))
+                    .headOption
+                    .collect { case x:SettableGaugeMetric => x }
+                    .getOrElse {
+                        val metric = SettableGaugeMetric(name, labels)
+                        metrics.addMetric(metric)
+                        metric
+                    }
+                }.toMap
 
-        Map("main" -> result)
+            // Create listener for fetching the metrics
+            val listener = new QueryExecutionListener {
+                override def onSuccess(funcName: String, qe: QueryExecution, durationNs: Long): Unit = {
+                    publishMetrics(qe, observationName, metricMap)
+                }
+                override def onFailure(funcName: String, qe: QueryExecution, exception: Exception): Unit = {
+                    publishMetrics(qe, observationName, metricMap)
+                }
+            }
+            result.sparkSession.listenerManager.register(listener)
+
+            // Register listener for cleanup when the DataFrame is to be garbage collected
+            execution.cleaner.registerQueryExecutionListener(result, listener)
+
+            Map("main" -> result)
+        }
     }
 
     /**

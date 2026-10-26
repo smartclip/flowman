@@ -104,32 +104,55 @@ final case class GroupedAggregateMapping(
         // Create GROUP BY dimensions and GROUPING SETs
         val dimensions = groups.values.flatMap(_.dimensions).toSeq.distinct ++ filterNames
         val dimensionIndices = dimensions.zipWithIndex.toMap
-        val dimensionColumns = dimensions.map(col)
-        val groupingColumns = groups.values.map(g =>
-            g.dimensions.map(d => dimensionColumns(dimensionIndices(d))) ++
-                g.filter.map(f => col(filterNames(filterIndices(f))))
+        val groupingSets = groups.values.map(g =>
+            g.dimensions ++ g.filter.map(f => filterNames(filterIndices(f)))
         ).toSeq
 
-        val allGroupings = performGroupedAggregation(filteredInput, dimensionColumns, groupingColumns)
-
-        // This is a workaround for newer Spark version, which apparently use a different mechanism to derive
-        // grouping-ids than Spark up until 3.1.x. It was changed back in Spark 3.3.1
-        val legacyMode = input.sparkSession.conf.getOption("spark.sql.legacy.groupingIdWithAppendedUserGroupBy")
-            .map(_.toBoolean)
-            .getOrElse(org.apache.spark.SPARK_VERSION >= "3.2" && org.apache.spark.SPARK_VERSION < "3.3.1")
-        val dimensionIndices2 = {
-            if (legacyMode)
-                groups.values.flatMap(g => g.dimensions ++ g.filter.map(f => filterNames(filterIndices(f)))).toSeq.distinct.zipWithIndex.toMap
-            else
-                dimensionIndices
+        val allGroupings = {
+            if (isConnect(input))
+                performGroupedAggregationSql(filteredInput, dimensions.map(d => (d, quoteIdentifier(d))), groupingSets.map(_.map(quoteIdentifier)))
+            else {
+                val dimensionColumns = dimensions.map(col)
+                val groupingColumns = groupingSets.map(_.map(col))
+                performGroupedAggregation(filteredInput, dimensionColumns, groupingColumns)
+            }
         }
+
         // Calculate grouping IDs used for extracting individual groups
-        val numDimensions = dimensions.size
-        val groupingMask = (1 << numDimensions) - 1
-        val groupIds = groups.values.map { group =>
-            val dimensions = group.dimensions
-            val filter = group.filter.map(f => filterNames(filterIndices(f)))
-            (groupingMask +: (dimensions ++ filter).map(d => ~(1 << (numDimensions - 1 - dimensionIndices2(d))))).reduce(_ & _)
+        val groupIds = {
+            if (isConnect(input)) {
+                // Spark SQL derives the grouping_id() bits from the order in which grouping columns first appear
+                // within the GROUPING SETS clause, not from the order of the full dimension list. Hence the masks
+                // must be computed against that discovery order in order to match the SQL grouping_id() values
+                val sqlDimensions = groupingSets.flatten.distinct
+                val sqlDimensionIndices = sqlDimensions.zipWithIndex.toMap
+                val numDimensions = sqlDimensions.size
+                val groupingMask = (1 << numDimensions) - 1
+                groups.values.map { group =>
+                    val entries = group.dimensions ++ group.filter.map(f => filterNames(filterIndices(f)))
+                    (groupingMask +: entries.map(d => ~(1 << (numDimensions - 1 - sqlDimensionIndices(d))))).reduce(_ & _)
+                }
+            }
+            else {
+                // This is a workaround for newer Spark version, which apparently use a different mechanism to derive
+                // grouping-ids than Spark up until 3.1.x. It was changed back in Spark 3.3.1
+                val legacyMode = input.sparkSession.conf.getOption("spark.sql.legacy.groupingIdWithAppendedUserGroupBy")
+                    .map(_.toBoolean)
+                    .getOrElse(org.apache.spark.SPARK_VERSION >= "3.2" && org.apache.spark.SPARK_VERSION < "3.3.1")
+                val dimensionIndices2 = {
+                    if (legacyMode)
+                        groups.values.flatMap(g => g.dimensions ++ g.filter.map(f => filterNames(filterIndices(f)))).toSeq.distinct.zipWithIndex.toMap
+                    else
+                        dimensionIndices
+                }
+                val numDimensions = dimensions.size
+                val groupingMask = (1 << numDimensions) - 1
+                groups.values.map { group =>
+                    val dimensions = group.dimensions
+                    val filter = group.filter.map(f => filterNames(filterIndices(f)))
+                    (groupingMask +: (dimensions ++ filter).map(d => ~(1 << (numDimensions - 1 - dimensionIndices2(d))))).reduce(_ & _)
+                }
+            }
         }
 
         // Apply all grouping filters to reduce cache size.
@@ -161,14 +184,25 @@ final case class GroupedAggregateMapping(
         val filteredInput = filters.zip(filterNames).foldLeft(input)((df, fi) => df.withColumn(fi._2, expr(fi._1)))
 
         // Create GROUP BY dimensions and GROUPING SETs via nested structs
-        val dimensionColumns = groups.values.zipWithIndex.map { case (g,i) =>
+        val groupStructs = groups.values.zipWithIndex.map { case (g,i) =>
             val filter = g.filter.map(f => filterNames(filterIndices(f)))
             val dimensions = g.dimensions.distinct ++ filter
-            struct(dimensions.map(d => col(d)):_*).as(s"_flowman_grouping_set_$i")
+            (s"_flowman_grouping_set_$i", dimensions)
         }.toSeq
-        val groupingColumns = dimensionColumns.map(g => Seq(g))
 
-        val allGroupings = performGroupedAggregation(filteredInput, dimensionColumns, groupingColumns)
+        val allGroupings = {
+            if (isConnect(input))
+                performGroupedAggregationSql(
+                    filteredInput,
+                    groupStructs.map { case (alias, dims) => (alias, "struct(" + dims.map(quoteIdentifier).mkString(",") + ")") },
+                    groupStructs.map { case (_, dims) => Seq("struct(" + dims.map(quoteIdentifier).mkString(",") + ")") }
+                )
+            else {
+                val dimensionColumns = groupStructs.map { case (alias, dims) => struct(dims.map(col):_*).as(alias) }
+                val groupingColumns = dimensionColumns.map(g => Seq(g))
+                performGroupedAggregation(filteredInput, dimensionColumns, groupingColumns)
+            }
+        }
 
         val numGroups = groups.size
         val groupingMask = (1 << numGroups) - 1
@@ -215,6 +249,37 @@ final case class GroupedAggregateMapping(
             .select((dimensions.map(col) ++ aggregates):_*)
 
         group.having.map(f => df.filter(f)).getOrElse(df)
+    }
+
+    private def isConnect(input:DataFrame) : Boolean = {
+        input.sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession"
+    }
+
+    private def quoteIdentifier(name:String) : String = {
+        "`" + name.replace("`", "``") + "`"
+    }
+
+    /**
+      * Executes a grouped aggregation via a GROUPING SETS SQL statement instead of constructing a GroupingSets
+      * logical plan directly. This is required for Spark Connect, where a client cannot create such a plan
+      * @param input
+      * @param projectedGroupingColumns
+      * @param groupingSets
+      * @return
+      */
+    private def performGroupedAggregationSql(input:DataFrame, projectedGroupingColumns:Seq[(String,String)], groupingSets:Seq[Seq[String]]) : DataFrame = {
+        val aggregateSelects = aggregations.toSeq.map(kv => kv._2 + " AS " + quoteIdentifier(kv._1))
+        val dimensionSelects = projectedGroupingColumns.map(kv => "first(" + kv._2 + ") AS " + quoteIdentifier(kv._1))
+        val groupingSetSql = groupingSets.map(set => "(" + set.mkString(",") + ")").mkString(",")
+        val inputName = "_flowman_grouping_aggregate_input"
+        val sql = "SELECT " + (aggregateSelects ++ dimensionSelects :+ "grouping_id() AS _flowman_grouping_id").mkString(",") +
+            " FROM " + quoteIdentifier(inputName) +
+            " GROUP BY GROUPING SETS (" + groupingSetSql + ")"
+
+        // Spark Connect analyzes queries lazily, so materialize the result while the temporary view is still available
+        DataFrameUtils.withTempView(inputName, input) {
+            input.sparkSession.sql(sql).localCheckpoint(false)
+        }
     }
 
     private def performGroupedAggregation(input:DataFrame, dimensions:Seq[Column], groupings:Seq[Seq[Column]]) : DataFrame = {
