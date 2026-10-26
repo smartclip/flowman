@@ -18,6 +18,7 @@ package com.dimajix.flowman.catalog
 
 import java.util.Locale
 
+import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.catalog.CatalogTableType
 
@@ -47,7 +48,17 @@ object TableDefinition {
             TableIdentifier(id.table, id.database.toSeq),
             typ,
             columns=schema.fields,
-            partitionColumnNames=table.partitionColumnNames
+            partitionColumnNames=table.partitionColumnNames,
+            comment=table.comment,
+            provider=table.provider,
+            location=table.storage.locationUri.map(new Path(_)),
+            external=table.tableType == CatalogTableType.EXTERNAL,
+            tableProperties=table.properties,
+            viewText=table.viewText,
+            inputFormat=table.storage.inputFormat,
+            outputFormat=table.storage.outputFormat,
+            serde=table.storage.serde,
+            serdeProperties=table.storage.properties
         )
     }
 }
@@ -59,17 +70,26 @@ final case class TableDefinition(
     primaryKey: Option[PrimaryKey] = None,
     indexes: Seq[TableIndex] = Seq.empty,
     partitionColumnNames: Seq[String] = Seq.empty,
-    storageFormat: Option[String] = None
+    storageFormat: Option[String] = None,
+    provider: Option[String] = None,
+    location: Option[Path] = None,
+    external: Boolean = false,
+    tableProperties: Map[String, String] = Map.empty,
+    viewText: Option[String] = None,
+    inputFormat: Option[String] = None,
+    outputFormat: Option[String] = None,
+    serde: Option[String] = None,
+    serdeProperties: Map[String, String] = Map.empty
 ) {
     /**
-     * Returns only the data columns without partition columns
-     * @return
-     */
+      * Returns only the data columns without partition columns
+      * @return
+      */
     def dataColumns : Seq[Field] = columns.filterNot(c => partitionColumnNames.contains(c.name))
     /**
-     * Returns only the partition columns without data columns
-     * @return
-     */
+      * Returns only the partition columns without data columns
+      * @return
+      */
     def partitionColumns : Seq[Field] = partitionColumnNames.flatMap(p => columns.find(_.name == p))
 
     def schema : StructType = StructType(columns)
@@ -85,6 +105,11 @@ final case class TableDefinition(
         storageFormat = storageFormat.map(_.toLowerCase(Locale.ROOT))
     )
 }
+
+
+final case class PartitionDefinition(
+    location: Path
+)
 
 
 final case class TableIndex(

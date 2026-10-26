@@ -25,8 +25,7 @@ import org.apache.spark.sql.SparkShim
 import org.apache.spark.sql.catalyst.analysis.PartitionAlreadyExistsException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
-import org.apache.spark.sql.catalyst.catalog.CatalogTable
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType
+import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.hive.execution.InsertIntoHiveTable
 import org.apache.spark.sql.internal.HiveSerDe
 import org.apache.spark.sql.types.CharType
@@ -46,6 +45,7 @@ import com.dimajix.flowman.catalog.TableChange.UpdateColumnComment
 import com.dimajix.flowman.catalog.TableChange.UpdateColumnNullability
 import com.dimajix.flowman.catalog.TableChange.UpdateColumnType
 import com.dimajix.flowman.catalog.TableDefinition
+import com.dimajix.flowman.catalog.TableType
 import com.dimajix.flowman.catalog.TableIdentifier
 import com.dimajix.flowman.catalog.TableType
 import com.dimajix.flowman.execution.Context
@@ -223,24 +223,52 @@ final case class HiveTableRelation(
         val spark = execution.spark
         val catalog = execution.catalog
 
-        if (partitionSpec.nonEmpty) {
-            val hiveTable = catalog.getTable(table)
-            val query = df.queryExecution.logical
+        if (execution.backend.isConnect) {
+            // A Spark Connect client cannot construct an InsertIntoHiveTable command. Instead the partition
+            // columns are added as constant values and the datasource writer performs a dynamic partition insert
+            if (partitions.nonEmpty && partitionSpec.isEmpty && mode == OutputMode.OVERWRITE) {
+                catalog.truncateTable(table)
+            }
+            val tableDef = catalog.getTable(table)
+            val partitionTypes = tableDef.partitionSchema.fields.map(f => f.name -> f.sparkType).toMap
+            val partitionedDf = partitionSpec.values.map { case (name, value) =>
+                name -> FieldValue.asString(value)
+            }.foldLeft(df) { case (acc, (name, value)) =>
+                val colType = partitionTypes.get(name).map(t => lit(value).cast(t)).getOrElse(lit(value))
+                acc.withColumn(name, colType)
+            }
+            partitionedDf.write
+                .mode(mode.batchMode)
+                .options(options)
+                .insertInto(table.unquotedString)
 
-            val overwrite = mode == OutputMode.OVERWRITE || mode == OutputMode.OVERWRITE_DYNAMIC
-            val cmd = InsertIntoHiveTable(
-                table = hiveTable,
-                partition = partitionSpec.catalogPartition.mapValues(Some(_):Option[String]).toMap,
-                query = query,
-                overwrite = overwrite,
-                ifPartitionNotExists = false,
-                query.output.map(_.name)
-            )
-            val qe = spark.sessionState.executePlan(cmd)
-            SparkShim.withNewExecutionId(spark, qe)(qe.toRdd)
+            // The datasource writer does not register newly created partitions in the Hive metastore, so
+            // synchronize the partition catalog with the file system
+            if (partitions.nonEmpty) {
+                spark.sql(s"MSCK REPAIR TABLE ${table.quotedString}")
+            }
+            if (partitionSpec.nonEmpty) {
+                catalog.refreshPartition(table, partitionSpec)
+            }
+        }
+        else if (partitionSpec.nonEmpty) {
+                val hiveTable = spark.sessionState.catalog.getTableMetadata(table.toSpark)
+                val query = df.queryExecution.logical
 
-            // Finally refresh Hive partition
-            catalog.refreshPartition(table, partitionSpec)
+                val overwrite = mode == OutputMode.OVERWRITE || mode == OutputMode.OVERWRITE_DYNAMIC
+                val cmd = InsertIntoHiveTable(
+                    table = hiveTable,
+                    partition = partitionSpec.catalogPartition.mapValues(Some(_):Option[String]).toMap,
+                    query = query,
+                    overwrite = overwrite,
+                    ifPartitionNotExists = false,
+                    query.output.map(_.name)
+                )
+                val qe = spark.sessionState.executePlan(cmd)
+                SparkShim.withNewExecutionId(spark, qe)(qe.toRdd)
+
+                // Finally refresh Hive partition
+                catalog.refreshPartition(table, partitionSpec)
         }
         else {
             // If OVERWRITE is specified, remove all partitions for partitioned tables
@@ -338,18 +366,18 @@ final case class HiveTableRelation(
         val catalog = execution.catalog
         if (catalog.tableExists(table)) {
             val table = catalog.getTable(this.table)
-            val locationExists = table.storage.locationUri.forall(loc => execution.fs.file(loc).exists())
+            val locationExists = table.location.forall(loc => execution.fs.file(loc).exists())
             if (!locationExists) {
                 false
             }
             else {
                 fullSchema match {
                     case Some(fullSchema) =>
-                        if (table.tableType == CatalogTableType.VIEW) {
+                        if (table.tableType == TableType.VIEW) {
                             false
                         }
                         else {
-                            val sourceTable = TableDefinition.ofTable(table)
+                            val sourceTable = table
                             val targetSchema = com.dimajix.flowman.types.StructType(fullSchema.fields)
                             val targetTable = TableDefinition(
                                 this.table,
@@ -428,7 +456,13 @@ final case class HiveTableRelation(
                 .save(execution.fs.file(avroSchemaUrl))
         }
 
-        val defaultStorage = HiveSerDe.getDefaultStorage(execution.spark.sessionState.conf)
+        val defaultStorage = {
+            // sessionState is not available from a Spark Connect client, so use the plain defaults in that case
+            if (execution.backend.isConnect)
+                CatalogStorageFormat.empty
+            else
+                HiveSerDe.getDefaultStorage(execution.spark.sessionState.conf)
+        }
         val fileStorage: CatalogStorageFormat = if (format.exists(_.nonEmpty)) {
             HiveSerDe.sourceToSerDe(format.get) match {
                 case Some(s) =>
@@ -456,37 +490,31 @@ final case class HiveTableRelation(
             .filter(_.nonEmpty)
             .orElse(fileStorage.outputFormat)
             .orElse(defaultStorage.outputFormat)
-        val rowFormat = this.rowFormat
+        val serdeFormat = this.rowFormat
             .filter(_.nonEmpty)
             .orElse(fileStorage.serde)
             .orElse(defaultStorage.serde)
 
-        // Configure catalog table by assembling all options
-        val catalogTable = CatalogTable(
-            identifier = table.toSpark,
-            tableType =
-                if (external)
-                    CatalogTableType.EXTERNAL
-                else
-                    CatalogTableType.MANAGED,
-            storage = CatalogStorageFormat(
-                locationUri = location.map(_.toUri),
-                inputFormat = inputFormat,
-                outputFormat = outputFormat,
-                serde = rowFormat,
-                compressed = false,
-                properties = fileStorage.properties ++ serdeProperties
-            ),
-            provider = Some("hive"),
-            schema = catalogSchema,
+        // Configure table definition by assembling all options
+        val tableDef = TableDefinition(
+            identifier = table,
+            tableType = TableType.TABLE,
+            columns = fields,
             partitionColumnNames = partitions.map(_.name),
-            properties = properties,
-            comment = description
+            comment = description,
+            provider = Some("hive"),
+            location = location,
+            external = external,
+            inputFormat = inputFormat,
+            outputFormat = outputFormat,
+            serde = serdeFormat,
+            serdeProperties = fileStorage.properties ++ serdeProperties,
+            tableProperties = properties
         )
 
         // Create table
         val catalog = execution.catalog
-        catalog.createTable(catalogTable, false)
+        catalog.createTable(tableDef, false)
         execution.refreshResource(resource)
     }
 
@@ -515,14 +543,14 @@ final case class HiveTableRelation(
         if (schema.nonEmpty && catalog.tableExists(table)) {
             val curTable = catalog.getTable(table)
             // Check if current table is a VIEW or a TABLE
-            if (curTable.tableType == CatalogTableType.VIEW) {
+            if (curTable.tableType == TableType.VIEW) {
                 migrateFromView(execution)
             }
             else {
                 // Ensure target directory exists
-                val location = execution.fs.file(curTable.location)
-                if (!location.exists()) {
-                    location.mkdirs()
+                val location = curTable.location
+                if (location.forall(loc => !execution.fs.file(loc).exists())) {
+                    location.foreach(loc => execution.fs.file(loc).mkdirs())
                 }
                 migrateFromTable(execution, curTable)
             }
@@ -545,8 +573,8 @@ final case class HiveTableRelation(
         }
     }
 
-    private def migrateFromTable(execution:Execution, curTable:CatalogTable) : Unit = {
-        val sourceTable = TableDefinition.ofTable(curTable)
+    private def migrateFromTable(execution:Execution, curTable:TableDefinition) : Unit = {
+        val sourceTable = curTable
         val targetSchema =  com.dimajix.flowman.types.StructType(fullSchema.get.fields)
         val targetTable = TableDefinition(
             table,
@@ -635,7 +663,7 @@ final case class HiveTableRelation(
 
     override protected def outputSchema(execution:Execution) : Option[StructType] = {
         // We specifically use the existing physical Hive schema
-        val currentSchema = execution.catalog.getTable(table).dataSchema
+        val currentSchema = execution.catalog.getTable(table).dataSchema.catalogType
 
         // If a schema is explicitly specified, we use that one to back-merge VarChar(n) and Char(n). This
         // is mainly required for Spark < 3.1, which cannot correctly handle VARCHAR and CHAR types in Hive

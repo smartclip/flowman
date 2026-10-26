@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory
 
 import com.dimajix.flowman.catalog.Catalog
 import com.dimajix.flowman.catalog.ClassicHiveCatalog
+import com.dimajix.flowman.catalog.ConnectHiveCatalog
 import com.dimajix.flowman.config.Configuration
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.execution.Session.builder
@@ -534,7 +535,10 @@ final class Session private[execution](
 
     private lazy val _catalog = {
         val externalCatalogs = _namespace.toSeq.flatMap(_.catalogs).map(_.instantiate(namespaceContext))
-        new ClassicHiveCatalog(spark, config, externalCatalogs)
+        if (SparkBackend.of(spark).isConnect)
+            new ConnectHiveCatalog(spark, config)
+        else
+            new ClassicHiveCatalog(spark, config, externalCatalogs)
     }
 
     private lazy val _projectStore : Store = {

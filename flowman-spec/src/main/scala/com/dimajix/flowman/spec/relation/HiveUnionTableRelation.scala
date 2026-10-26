@@ -19,13 +19,13 @@ package com.dimajix.flowman.spec.relation
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.types.StructField
 import org.apache.spark.sql.types.StructType
 import com.dimajix.common.MapIgnoreCase
 import com.dimajix.common.No
 import com.dimajix.common.SetIgnoreCase
 import com.dimajix.common.Trilean
+import com.dimajix.flowman.catalog.TableDefinition
 import com.dimajix.flowman.catalog.TableIdentifier
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
@@ -50,6 +50,7 @@ import com.dimajix.flowman.model.SchemaRelation
 import com.dimajix.flowman.transforms.CharVarcharPolicy
 import com.dimajix.flowman.transforms.SchemaEnforcer
 import com.dimajix.flowman.transforms.UnionTransformer
+import com.dimajix.flowman.types.Field
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
 import com.dimajix.flowman.util.SparkSchemaUtils
@@ -153,9 +154,17 @@ final case class HiveUnionTableRelation(
     }
     private def viewRelationFromTables(executor: Execution, tables:Seq[TableIdentifier]) : HiveViewRelation = {
         val spark = executor.spark
-        val df = tables.map(t => spark.read.table(t.unquotedString))
         val finalSchema = schema.get.sparkSchema.fields ++ partitions.map(_.sparkField)
-        val sql = HiveUnionTableRelation.unionSql(df, StructType(finalSchema))
+        val sql = if (executor.backend.isConnect) {
+            // A Spark Connect client cannot access the query plan of the DataFrames, so the union SQL
+            // is constructed directly from the backend tables and the final schema instead
+            val cols = finalSchema.map(f => s"`${f.name}`").mkString(", ")
+            tables.map(t => s"SELECT $cols FROM ${t.quotedString}").mkString("\nUNION ALL\n")
+        }
+        else {
+            val df = tables.map(t => spark.read.table(t.unquotedString))
+            HiveUnionTableRelation.unionSql(df, StructType(finalSchema))
+        }
         viewRelationFromSql(sql)
     }
 
@@ -252,7 +261,7 @@ final case class HiveUnionTableRelation(
         // 2. Find appropriate table
         val table = allTables.find { id =>
                 val table = catalog.getTable(id)
-                SparkSchemaUtils.isCompatible(df.schema, table.schema)
+                SparkSchemaUtils.isCompatible(df.schema, table.schema.sparkType)
             }
             .orElse {
                 // Try to use provided schema instead
@@ -260,7 +269,7 @@ final case class HiveUnionTableRelation(
                     val catalogSchema = schema.catalogSchema
                     allTables.find { id =>
                         val table = catalog.getTable(id)
-                        SparkSchemaUtils.isCompatible(catalogSchema, table.schema)
+                        SparkSchemaUtils.isCompatible(catalogSchema, table.schema.sparkType)
                     }
                 }
             }
@@ -370,12 +379,12 @@ final case class HiveUnionTableRelation(
             val target = allTables
                 .find { id =>
                     val table = catalog.getTable(id)
-                    val targetSchema = table.dataSchema
+                    val targetSchema = table.dataSchema.fields
                     val targetFieldsByName = MapIgnoreCase(targetSchema.map(f => (f.name, f)))
 
                     sourceSchema.forall { field =>
                         targetFieldsByName.get(field.name)
-                            .forall(tgt => SparkSchemaUtils.isCompatible(field, tgt))
+                            .forall(tgt => SparkSchemaUtils.isCompatible(field, tgt.catalogField))
                     }
                 }
 
@@ -384,7 +393,7 @@ final case class HiveUnionTableRelation(
                     // 3. If found:
                     //  3.1 Migrate table (add new columns)
                     val table = catalog.getTable(id)
-                    val targetSchema = table.dataSchema
+                    val targetSchema = table.dataSchema.fields
                     val targetFields = SetIgnoreCase(targetSchema.map(f => f.name))
 
                     val missingFields = sourceSchema.filterNot(f => targetFields.contains(f.name))
@@ -495,12 +504,12 @@ final case class HiveUnionTableRelation(
         val target = allTables
             .find { id =>
                 val table = catalog.getTable(id)
-                val targetSchema = table.dataSchema
+                val targetSchema = table.dataSchema.fields
                 val targetFieldsByName = MapIgnoreCase(targetSchema.map(f => (f.name, f)))
 
                 sourceSchema.forall { field =>
                     targetFieldsByName.get(field.name)
-                        .forall(tgt => SparkSchemaUtils.isCompatible(field, tgt))
+                        .forall(tgt => SparkSchemaUtils.isCompatible(field, tgt.catalogField))
                 }
             }
 
@@ -509,7 +518,7 @@ final case class HiveUnionTableRelation(
                 // 3. If found:
                 //  3.1 Migrate table (add new columns)
                 val table = catalog.getTable(id)
-                val targetSchema = table.dataSchema
+                val targetSchema = table.dataSchema.fields
                 val targetFields = SetIgnoreCase(targetSchema.map(f => f.name))
 
                 val missingFields = sourceSchema.filterNot(f => targetFields.contains(f.name))
@@ -543,14 +552,14 @@ final case class HiveUnionTableRelation(
         }
     }
 
-    private def doMigrateAlterTable(execution:Execution, table:CatalogTable, missingFields:Seq[StructField]) : Unit = {
+    private def doMigrateAlterTable(execution:Execution, table:TableDefinition, missingFields:Seq[StructField]) : Unit = {
         doMigrate(execution) {
             val catalog = execution.catalog
-            val id = TableIdentifier.of(table.identifier)
+            val id = table.identifier
             val targetSchema = table.dataSchema
-            val newSchema = StructType(targetSchema.fields ++ missingFields)
+            val newSchema = StructType(targetSchema.fields.map(_.catalogField) ++ missingFields)
             logger.info(s"Migrating Hive Union Table relation '$identifier' by adding new columns ${missingFields.map(_.name).mkString(",")} to Hive table $id. New schema is\n ${newSchema.treeString}")
-            catalog.addTableColumns(id, missingFields)
+            catalog.addTableColumns(id, missingFields.map(Field.of))
         }
     }
 

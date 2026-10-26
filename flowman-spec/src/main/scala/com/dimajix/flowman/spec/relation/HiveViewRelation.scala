@@ -19,12 +19,12 @@ package com.dimajix.flowman.spec.relation
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonPropertyDescription
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.catalyst.catalog.CatalogTable
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType
 import org.apache.spark.sql.types.StructType
 
 import com.dimajix.common.Trilean
+import com.dimajix.flowman.catalog.TableDefinition
 import com.dimajix.flowman.catalog.TableIdentifier
+import com.dimajix.flowman.catalog.TableType
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.MappingUtils
@@ -42,6 +42,7 @@ import com.dimajix.flowman.model.PartitionSchema
 import com.dimajix.flowman.model.RegexResourceIdentifier
 import com.dimajix.flowman.model.Relation
 import com.dimajix.flowman.model.ResourceIdentifier
+import com.dimajix.flowman.spec.mapping.SqlMapping
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
 import com.dimajix.spark.sql.SchemaUtils
@@ -142,9 +143,9 @@ final case class HiveViewRelation(
             val newSelect = getSelect(execution)
             val curTable = catalog.getTable(table)
             // Check if current table is a VIEW or a table
-            if (curTable.tableType == CatalogTableType.VIEW) {
+            if (curTable.tableType == TableType.VIEW) {
                 // Check that both SQL and schema are correct
-                lazy val curSchema = normalizeSchema(curTable.schema, migrationPolicy)
+                lazy val curSchema = normalizeSchema(curTable.schema.sparkType, migrationPolicy)
                 lazy val newSchema = normalizeSchema(execution.spark.sql(newSelect).schema, migrationPolicy)
                 curTable.viewText.contains(newSelect) && curSchema == newSchema
             }
@@ -194,7 +195,7 @@ final case class HiveViewRelation(
             val newSelect = getSelect(execution)
             val curTable = catalog.getTable(table)
             // Check if current table is a VIEW or a TABLE
-            if (curTable.tableType == CatalogTableType.VIEW) {
+            if (curTable.tableType == TableType.VIEW) {
                 migrateFromView(execution, curTable, newSelect)
             }
             else {
@@ -203,8 +204,8 @@ final case class HiveViewRelation(
         }
     }
 
-    private def migrateFromView(execution:Execution, curTable:CatalogTable, newSelect:String) : Unit = {
-        lazy val curSchema = normalizeSchema(curTable.schema, migrationPolicy)
+    private def migrateFromView(execution:Execution, curTable:TableDefinition, newSelect:String) : Unit = {
+        lazy val curSchema = normalizeSchema(curTable.schema.sparkType, migrationPolicy)
         lazy val newSchema = normalizeSchema(execution.spark.sql(newSelect).schema, migrationPolicy)
         if (!curTable.viewText.contains(newSelect) || curSchema != newSchema) {
             migrationStrategy match {
@@ -281,7 +282,26 @@ final case class HiveViewRelation(
     private def buildMappingSql(executor: Execution, output:MappingOutputIdentifier) : String = {
         val mapping = context.getMapping(output.mapping)
         val df = executor.instantiate(mapping, output.output)
-        new SqlBuilder(df).toSQL
+        if (executor.backend.isConnect) {
+            // A Spark Connect client cannot access `df.queryExecution` to serialize the analyzed SQL
+            // plan. If the mapping is backed by an explicit SQL SELECT statement, reuse it directly (the
+            // resulting Hive view then references only permanent objects). Otherwise the mapping output
+            // is temporarily registered as a session view on the server and the Hive view is defined
+            // against it.
+            mapping match {
+                case sqlMapping: SqlMapping if sqlMapping.sql.exists(_.nonEmpty) =>
+                    sqlMapping.sql.get
+                case _ =>
+                    // Materialize the mapping output as a permanent managed table. A permanent Hive view
+                    // cannot reference temporary objects, so the temp view approach does not work here.
+                    val tempTable = "_flowman_hive_view_mapping"
+                    df.write.mode(org.apache.spark.sql.SaveMode.Overwrite).saveAsTable(tempTable)
+                    s"SELECT * FROM $tempTable"
+            }
+        }
+        else {
+            new SqlBuilder(df).toSQL
+        }
     }
 }
 

@@ -20,7 +20,6 @@ import com.google.common.io.Resources
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -28,6 +27,7 @@ import com.dimajix.common.No
 import com.dimajix.common.Trilean
 import com.dimajix.common.Yes
 import com.dimajix.flowman.catalog.TableIdentifier
+import com.dimajix.flowman.catalog.TableType
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.MigrationPolicy
 import com.dimajix.flowman.execution.MigrationStrategy
@@ -425,7 +425,7 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.exists(execution) should be (No)
         table.create(execution)
         table.exists(execution) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (CatalogTableType.MANAGED)
+        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (TableType.TABLE)
 
         table.exists(execution) should be (Yes)
         table.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -442,7 +442,7 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.exists(execution) should be (Yes)
         table.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (CatalogTableType.MANAGED)
+        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (TableType.TABLE)
 
         // == Create TABLE ============================================================================================
         a[TableAlreadyExistsException] should be thrownBy (table.create(execution))
@@ -452,7 +452,7 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.exists(execution) should be (Yes)
         table.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (CatalogTableType.MANAGED)
+        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (TableType.TABLE)
 
         // == Migrate VIEW ==========================================================================================
         view.migrate(execution)
@@ -462,7 +462,7 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.exists(execution) should be (Yes)
         table.conforms(execution, MigrationPolicy.RELAXED) should be (No)
         table.conforms(execution, MigrationPolicy.STRICT) should be (No)
-        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (CatalogTableType.VIEW)
+        session.catalog.getTable(TableIdentifier("table_or_view", Some("default"))).tableType should be (TableType.VIEW)
 
         // == Destroy VIEW ===========================================================================================
         view.destroy(execution)
@@ -526,8 +526,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.exists(execution) should be (Yes)
         table.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (CatalogTableType.MANAGED)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (TableType.TABLE)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Create VIEW =============================================================================================
         view.exists(execution) should be (No)
@@ -535,15 +535,15 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.exists(execution) should be (Yes)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.migrate(execution)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Replace TABLE ===========================================================================================
         table.destroy(execution)
@@ -553,11 +553,11 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.conforms(execution, MigrationPolicy.STRICT) should be (No)
         table2.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table2.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (CatalogTableType.MANAGED)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (TableType.TABLE)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.conforms(execution, MigrationPolicy.RELAXED) should be (No)
@@ -565,8 +565,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.migrate(execution)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -574,8 +574,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.migrate(execution)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
         // == Destroy TABLE ===========================================================================================
         view.destroy(execution)
@@ -639,8 +639,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.exists(execution) should be (Yes)
         table.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (CatalogTableType.MANAGED)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (TableType.TABLE)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Create VIEW =============================================================================================
         view.exists(execution) should be (No)
@@ -648,15 +648,15 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.exists(execution) should be (Yes)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.migrate(execution)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Replace TABLE ===========================================================================================
         table.destroy(execution)
@@ -666,11 +666,11 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.conforms(execution, MigrationPolicy.STRICT) should be (No)
         table2.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table2.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (CatalogTableType.MANAGED)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (TableType.TABLE)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -681,8 +681,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.migrate(execution, MigrationPolicy.STRICT)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -693,8 +693,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.migrate(execution, MigrationPolicy.STRICT)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
         // == Replace TABLE ===========================================================================================
         table2.destroy(execution)
@@ -704,11 +704,11 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         table.conforms(execution, MigrationPolicy.STRICT) should be (No)
         table3.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         table3.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (CatalogTableType.MANAGED)
-        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema should be (table3.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).tableType should be (TableType.TABLE)
+        session.catalog.getTable(TableIdentifier("table", Some("default"))).schema.sparkType should be (table3.schema.get.sparkSchema)
 
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table2.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table2.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -719,8 +719,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.migrate(execution, MigrationPolicy.STRICT)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table3.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table3.schema.get.sparkSchema)
 
         // == Migrate VIEW ===========================================================================================
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -731,8 +731,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
         view.migrate(execution, MigrationPolicy.STRICT)
         view.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
         view.conforms(execution, MigrationPolicy.STRICT) should be (Yes)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (CatalogTableType.VIEW)
-        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema should be (table3.schema.get.sparkSchema)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).tableType should be (TableType.VIEW)
+        session.catalog.getTable(TableIdentifier("view", Some("default"))).schema.sparkType should be (table3.schema.get.sparkSchema)
 
         // == Destroy TABLE ===========================================================================================
         view.destroy(execution)

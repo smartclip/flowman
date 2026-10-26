@@ -29,6 +29,7 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchDatabaseException
 import org.apache.spark.sql.catalyst.analysis.NoSuchPartitionException
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
+import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.catalog.CatalogTablePartition
 import org.apache.spark.sql.catalyst.catalog.CatalogTableType
@@ -60,6 +61,7 @@ import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.fs.HadoopUtils
 import com.dimajix.flowman.model.PartitionField
 import com.dimajix.flowman.model.PartitionSchema
+import com.dimajix.flowman.types.Field
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.util.UtcTimestamp
 import com.dimajix.spark.features.hiveVarcharSupported
@@ -212,33 +214,34 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
       */
     @throws[NoSuchDatabaseException]
     @throws[TableAlreadyExistsException]
-    def createTable(table:CatalogTable, ignoreIfExists:Boolean) : Unit = {
+    def createTable(table:TableDefinition, ignoreIfExists:Boolean) : Unit = {
         require(table != null)
 
-        val exists = tableExists(TableIdentifier.of(table))
+        val catalogTable = toCatalogTable(table)
+        val exists = tableExists(TableIdentifier.of(catalogTable))
         if (!ignoreIfExists && exists) {
-            throw new TableAlreadyExistsException(table.identifier.database.getOrElse(""), table.identifier.table)
+            throw new TableAlreadyExistsException(catalogTable.identifier.database.getOrElse(""), catalogTable.identifier.table)
         }
 
         if (!exists) {
             // Cleanup table definition
-            val cleanedSchema = SchemaUtils.truncateComments(table.schema, maxCommentLength)
+            val cleanedSchema = SchemaUtils.truncateComments(catalogTable.schema, maxCommentLength)
             val catalogSchema = HiveCatalog.cleanupSchema(cleanedSchema)
-            val cleanedTable = table.copy(schema=catalogSchema)
+            val cleanedTable = catalogTable.copy(schema=catalogSchema)
 
-            logger.info(s"Creating Hive table ${table.identifier}")
+            logger.info(s"Creating Hive table ${catalogTable.identifier}")
             val cmd = CreateTableCommand(cleanedTable, ignoreIfExists)
             cmd.run(spark)
 
             // Create directory if not exists
-            table.storage.locationUri.foreach { uri =>
+            catalogTable.storage.locationUri.foreach { uri =>
                 val location = new Path(uri)
                 val fs = location.getFileSystem(hadoopConf)
                 HadoopUtils.createLocation(fs, location)
             }
 
             // Publish table to external catalog
-            callExternalCatalogs("CREATE TABLE")(_.createTable(table))
+            callExternalCatalogs("CREATE TABLE")(_.createTable(catalogTable))
         }
     }
 
@@ -264,7 +267,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         // Publish table to external catalog
         callExternalCatalogs(s"REFRESH TABLE $table") { catalog =>
             val definition = getTable(table)
-            catalog.refreshTable(definition)
+            catalog.refreshTable(toCatalogTable(definition))
         }
     }
 
@@ -285,12 +288,12 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
       */
     @throws[NoSuchDatabaseException]
     @throws[NoSuchTableException]
-    def getTable(name:TableIdentifier) : CatalogTable = {
+    def getTable(name:TableIdentifier) : TableDefinition = {
         val db = formatDatabaseName(name.database.getOrElse(catalog.getCurrentDatabase))
         val table = formatTableName(name.table)
         requireDbExists(db)
         requireTableExists(TableIdentifier(table, Seq(db)))
-        catalog.externalCatalog.getTable(db, table)
+        TableDefinition.ofTable(catalog.externalCatalog.getTable(db, table))
     }
 
     /**
@@ -302,8 +305,8 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
     @throws[NoSuchTableException]
     def getTableLocation(name:TableIdentifier) : Path = {
         val meta = getTable(name)
-        require(meta.tableType != CatalogTableType.VIEW)
-        new Path(meta.location)
+        require(meta.tableType != TableType.VIEW)
+        meta.location.getOrElse(throw new NoSuchTableException(meta.identifier.space.mkString("."), meta.identifier.table))
     }
 
     /**
@@ -360,21 +363,21 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         logger.info(s"Truncating Hive table $table")
 
         val catalogTable = getTable(table)
-        require(catalogTable.tableType != CatalogTableType.VIEW)
+        require(catalogTable.tableType != TableType.VIEW)
 
         // First drop partitions
-        if (catalogTable.partitionSchema != null && catalogTable.partitionSchema.fields.nonEmpty) {
+        if (catalogTable.partitionSchema.fields.nonEmpty) {
             val partitions = catalog.listPartitions(table.toSpark)
             dropPartitions(table, partitions.map(p => PartitionSpec(p.spec)))
         }
 
         // Then cleanup directory from any remainders
-        val location = new Path(catalogTable.location)
+        val location = catalogTable.location.getOrElse(throw new NoSuchTableException(table.database.getOrElse(catalog.getCurrentDatabase), table.table))
         val fs = location.getFileSystem(hadoopConf)
         HadoopUtils.truncateLocation(fs, location)
 
         spark.catalog.refreshTable(table.quotedString)
-        callExternalCatalogs(s"TRUNCATE TABLE $table")(_.truncateTable(catalogTable))
+        callExternalCatalogs(s"TRUNCATE TABLE $table")(_.truncateTable(toCatalogTable(catalogTable)))
     }
 
     /**
@@ -390,8 +393,9 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         require(changes != null)
 
         val catalogTable = getTable(table)
-        require(catalogTable.tableType != CatalogTableType.VIEW)
-        val tableColumns = MapIgnoreCase(catalogTable.schema.fields.map(f => (f.name -> f)))
+        require(catalogTable.tableType != TableType.VIEW)
+        val catalogSchema = catalogTable.schema.sparkType
+        val tableColumns = MapIgnoreCase(catalogSchema.fields.map(f => (f.name -> f)))
 
         val colsToAdd = mutable.Buffer[StructField]()
         changes.foreach {
@@ -418,29 +422,29 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
             cmd.run(spark)
         }
 
-        callExternalCatalogs(s"ALTER TABLE $table")(_.alterTable(catalogTable))
+        callExternalCatalogs(s"ALTER TABLE $table")(_.alterTable(toCatalogTable(catalogTable)))
     }
 
     /**
-     * Adds one or more new columns to an existing Hive table.
-     * @param table
-     * @param colsToAdd
-     */
+      * Adds one or more new columns to an existing Hive table.
+      * @param table
+      * @param colsToAdd
+      */
     @throws[NoSuchDatabaseException]
     @throws[NoSuchTableException]
-    def addTableColumns(table:TableIdentifier, colsToAdd: Seq[StructField]) : Unit = {
+    def addTableColumns(table:TableIdentifier, colsToAdd: Seq[Field]) : Unit = {
         require(table != null)
         require(colsToAdd != null)
         logger.info(s"Adding new columns ${colsToAdd.map(_.name).mkString(",")} to existing Hive table '$table'")
 
         val catalogTable = getTable(table)
-        require(catalogTable.tableType != CatalogTableType.VIEW)
+        require(catalogTable.tableType != TableType.VIEW)
 
-        val cleanedCols = cleanupFields(colsToAdd)
+        val cleanedCols = cleanupFields(colsToAdd.map(_.catalogField))
         val cmd = AlterTableAddColumnsCommand(table.toSpark, cleanedCols)
         cmd.run(spark)
 
-        callExternalCatalogs(s"ALTER TABLE $table")(_.alterTable(catalogTable))
+        callExternalCatalogs(s"ALTER TABLE $table")(_.alterTable(toCatalogTable(catalogTable)))
     }
 
     /**
@@ -462,7 +466,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         }
         if (complexTypes) {
             // Unfortunately listPartitions does not always work with Timestamp columns, therefore we need to do more work
-            val schema = getTable(table).partitionSchema
+            val schema = getTable(table).partitionSchema.sparkType.fields
                 .map(f => f.name.toLowerCase(Locale.ROOT) -> f)
                 .toMap
 
@@ -491,8 +495,8 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
     @throws[NoSuchDatabaseException]
     @throws[NoSuchTableException]
     @throws[NoSuchPartitionException]
-    def getPartition(table: TableIdentifier, partition:PartitionSpec): CatalogTablePartition = {
-        catalog.getPartition(table.toSpark, partition.catalogPartition)
+    def getPartition(table: TableIdentifier, partition:PartitionSpec): PartitionDefinition = {
+        PartitionDefinition(new Path(catalog.getPartition(table.toSpark, partition.catalogPartition).location))
     }
 
     /**
@@ -507,7 +511,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
     def getPartitionLocation(table:TableIdentifier, partition:PartitionSpec) : Path = {
         require(table != null)
         require(partition != null && partition.nonEmpty)
-        new Path(getPartition(table, partition).location)
+        getPartition(table, partition).location
     }
 
     /**
@@ -519,7 +523,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
     @throws[NoSuchTableException]
     def getPartitionSchema(table:TableIdentifier) : PartitionSchema = {
         require(table != null)
-        val schema = getTable(table).partitionSchema
+        val schema = getTable(table).partitionSchema.sparkType
         PartitionSchema(schema.fields.map(field => PartitionField.fromSpark(field)))
     }
 
@@ -544,7 +548,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         analyzePartition(table, sparkPartition)
 
         callExternalCatalogs(s"ADD PARTITION TO $table") { ec =>
-            val catalogTable = getTable(table)
+            val catalogTable = toCatalogTable(getTable(table))
             val catalogPartition = catalog.getPartition(table.toSpark, sparkPartition)
             ec.addPartition(catalogTable, catalogPartition)
         }
@@ -598,7 +602,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         analyzePartition(table, sparkPartition)
 
         callExternalCatalogs(s"ALTER PARTITION $table") { ec =>
-            val catalogTable = getTable(table)
+            val catalogTable = toCatalogTable(getTable(table))
             val catalogPartition = catalog.getPartition(table.toSpark, sparkPartition)
             ec.alterPartition(catalogTable, catalogPartition)
         }
@@ -642,7 +646,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
 
         callExternalCatalogs(s"TRUNCATE PARTITION $table") { ec =>
             val sparkPartition = partition.catalogPartition
-            val catalogTable = getTable(table)
+            val catalogTable = toCatalogTable(getTable(table))
             val catalogPartition = catalog.getPartition(table.toSpark, sparkPartition)
             ec.truncatePartition(catalogTable, catalogPartition)
         }
@@ -696,7 +700,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         cmd.run(spark)
 
         callExternalCatalogs(s"DROP PARTITION $table") { ec =>
-            val catalogTable = getTable(table)
+            val catalogTable = toCatalogTable(getTable(table))
             catalogPartitions.foreach(ec.dropPartition(catalogTable, _))
         }
     }
@@ -719,7 +723,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
             cmd.run(spark)
 
             // Publish view to external catalog
-            callExternalCatalogs(s"CREATE VIEW $table")(_.createView(getTable(table)))
+            callExternalCatalogs(s"CREATE VIEW $table")(_.createView(toCatalogTable(getTable(table))))
         }
     }
 
@@ -735,7 +739,7 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         cmd.run(spark)
 
         // Publish view to external catalog
-        callExternalCatalogs(s"ALTER VIEW $table")(_.alterView(getTable(table)))
+        callExternalCatalogs(s"ALTER VIEW $table")(_.alterView(toCatalogTable(getTable(table))))
     }
 
     /**
@@ -755,14 +759,14 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         if (exists) {
             logger.info(s"Dropping Hive view $table")
             val catalogTable = getTable(table)
-            require(catalogTable.tableType == CatalogTableType.VIEW)
+            require(catalogTable.tableType == TableType.VIEW)
 
             // Delete table itself
             val cmd = DropTableCommand(table.toSpark, ignoreIfNotExists, true, false)
             cmd.run(spark)
 
             // Remove table from external catalog
-            callExternalCatalogs(s"DROP VIEW $table")(_.dropView(catalogTable))
+            callExternalCatalogs(s"DROP VIEW $table")(_.dropView(toCatalogTable(catalogTable)))
         }
     }
 
@@ -777,6 +781,41 @@ final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration,
         }
     }
 
+
+    /**
+     * Converts a Flowman [[TableDefinition]] into a Catalyst [[CatalogTable]], which is required for executing
+     * the catalog DDL commands of the classic Spark API
+     * @param table
+     * @return
+     */
+    private def toCatalogTable(table:TableDefinition) : CatalogTable = {
+        val storage = CatalogStorageFormat(
+            locationUri = table.location.map(_.toUri),
+            inputFormat = table.inputFormat,
+            outputFormat = table.outputFormat,
+            serde = table.serde,
+            compressed = false,
+            properties = table.serdeProperties
+        )
+        CatalogTable(
+            identifier = table.identifier.toSpark,
+            tableType = {
+                if (table.tableType == TableType.VIEW)
+                    CatalogTableType.VIEW
+                else if (table.external)
+                    CatalogTableType.EXTERNAL
+                else
+                    CatalogTableType.MANAGED
+            },
+            storage = storage,
+            schema = StructType(table.columns.map(_.catalogField)),
+            partitionColumnNames = table.partitionColumnNames,
+            provider = table.provider,
+            properties = table.tableProperties,
+            comment = table.comment,
+            viewText = table.viewText
+        )
+    }
 
     /**
      * Format table name, taking into account case sensitivity.

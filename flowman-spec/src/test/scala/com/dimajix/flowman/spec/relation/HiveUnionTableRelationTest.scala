@@ -20,7 +20,6 @@ import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.analysis.PartitionAlreadyExistsException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType
 import org.apache.spark.sql.types.BooleanType
 import org.apache.spark.sql.types.CharType
 import org.apache.spark.sql.types.DoubleType
@@ -38,6 +37,7 @@ import com.dimajix.common.No
 import com.dimajix.common.Trilean
 import com.dimajix.common.Yes
 import com.dimajix.flowman.catalog.TableIdentifier
+import com.dimajix.flowman.catalog.TableType
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.MigrationPolicy
 import com.dimajix.flowman.execution.MigrationStrategy
@@ -150,10 +150,10 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val view = session.catalog.getTable(TableIdentifier("lala", Some("default")))
         view.provider should be (None)
         view.comment should be (None)
-        view.identifier should be (TableIdentifier("lala", Some("default")).toSpark)
-        view.tableType should be (CatalogTableType.VIEW)
+        view.identifier should be (TableIdentifier("lala", Some("default")))
+        view.tableType should be (TableType.VIEW)
         if (hiveVarcharSupported) {
-            SchemaUtils.dropMetadata(view.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(view.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", CharType(10)),
@@ -161,14 +161,14 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
             )))
         }
         else {
-            SchemaUtils.dropMetadata(view.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(view.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", StringType),
                 StructField("varchar_col", StringType)
             )))
         }
-        SchemaUtils.recoverCharVarchar(view.schema) should be (StructType(Seq(
+        SchemaUtils.recoverCharVarchar(view.schema.catalogType) should be (StructType(Seq(
             StructField("str_col", StringType),
             StructField("int_col", IntegerType),
             StructField("char_col", CharType(10)),
@@ -176,16 +176,16 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         )))
 
         view.partitionColumnNames should be (Seq())
-        view.partitionSchema should be (StructType(Nil))
+        view.partitionSchema should be (ftypes.StructType(Seq()))
 
         // Inspect Hive table
         val table = session.catalog.getTable(TableIdentifier("lala_1", Some("default")))
         table.provider should be (Some("hive"))
         table.comment should be(Some("This is a test table"))
-        table.identifier should be (TableIdentifier("lala_1", Some("default")).toSpark)
-        table.tableType should be (CatalogTableType.MANAGED)
+        table.identifier should be (TableIdentifier("lala_1", Some("default")))
+        table.tableType should be (TableType.TABLE)
         if (hiveVarcharSupported) {
-            SchemaUtils.dropMetadata(table.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(table.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", CharType(10)),
@@ -193,21 +193,21 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
             )))
         }
         else {
-            SchemaUtils.dropMetadata(table.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(table.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", StringType),
                 StructField("varchar_col", StringType)
             )))
         }
-        SchemaUtils.recoverCharVarchar(view.schema) should be (StructType(Seq(
+        SchemaUtils.recoverCharVarchar(view.schema.catalogType) should be (StructType(Seq(
             StructField("str_col", StringType),
             StructField("int_col", IntegerType),
             StructField("char_col", CharType(10)),
             StructField("varchar_col", VarcharType(10))
         )))
         table.partitionColumnNames should be (Seq())
-        table.partitionSchema should be (StructType(Nil))
+        table.partitionSchema should be (ftypes.StructType(Seq()))
         table.location.toString should not be ("")
 
         // Try to create relation, although it already exists
@@ -225,7 +225,7 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val rdd = spark.sparkContext.parallelize(Seq(
             Row("v1", 21, "v3", "v4")
         ))
-        val df = spark.createDataFrame(rdd, SchemaUtils.replaceCharVarchar(table.schema))
+        val df = spark.createDataFrame(rdd, SchemaUtils.replaceCharVarchar(table.schema.catalogType))
         relation.write(execution, df, Map())
         relation.exists(execution) should be (Yes)
         relation.conforms(execution, MigrationPolicy.RELAXED) should be (Yes)
@@ -492,34 +492,34 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val view = session.catalog.getTable(TableIdentifier("lala", Some("default")))
         view.provider should be (None)
         view.comment should be (None)
-        view.identifier should be (TableIdentifier("lala", Some("default")).toSpark)
-        view.tableType should be (CatalogTableType.VIEW)
-        view.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType),
-            StructField("partition_col", StringType)
+        view.identifier should be (TableIdentifier("lala", Some("default")))
+        view.tableType should be (TableType.VIEW)
+        view.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType),
+            Field("partition_col", ftypes.StringType)
         )))
         view.partitionColumnNames should be (Seq())
-        view.partitionSchema should be (StructType(Nil))
+        view.partitionSchema should be (ftypes.StructType(Seq()))
 
         // Inspect Hive table
         val table = session.catalog.getTable(TableIdentifier("lala_1", Some("default")))
         table.provider should be (Some("hive"))
         table.comment should be(Some("This is a test table"))
-        table.identifier should be (TableIdentifier("lala_1", Some("default")).toSpark)
-        table.tableType should be (CatalogTableType.MANAGED)
-        table.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType),
-            StructField("partition_col", StringType, nullable = false)
+        table.identifier should be (TableIdentifier("lala_1", Some("default")))
+        table.tableType should be (TableType.TABLE)
+        table.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType),
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
-        table.dataSchema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType)
+        table.dataSchema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType)
         )))
         table.partitionColumnNames should be (Seq("partition_col"))
-        table.partitionSchema should be (StructType(Seq(
-            StructField("partition_col", StringType, nullable = false)
+        table.partitionSchema should be (ftypes.StructType(Seq(
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
         table.location.toString should not be ("")
 
@@ -535,7 +535,7 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val rdd = spark.sparkContext.parallelize(Seq(
             Row("v1", 21)
         ))
-        val df = spark.createDataFrame(rdd, table.dataSchema)
+        val df = spark.createDataFrame(rdd, table.dataSchema.sparkType)
         relation.write(execution, df, Map("partition_col" -> SingleValue("part_1")))
         relation.exists(execution) should be (Yes)
         relation.loaded(execution, Map()) should be (Yes)
@@ -864,39 +864,39 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val view_1 = session.catalog.getTable(TableIdentifier("lala", Some("default")))
         view_1.provider should be (None)
         view_1.comment should be (None)
-        view_1.identifier should be (TableIdentifier("lala", Some("default")).toSpark)
-        view_1.tableType should be (CatalogTableType.VIEW)
-        view_1.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType),
-            StructField("partition_col", StringType)
+        view_1.identifier should be (TableIdentifier("lala", Some("default")))
+        view_1.tableType should be (TableType.VIEW)
+        view_1.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType),
+            Field("partition_col", ftypes.StringType)
         )))
         view_1.partitionColumnNames should be (Seq())
-        view_1.partitionSchema should be (StructType(Nil))
+        view_1.partitionSchema should be (ftypes.StructType(Seq()))
 
         // Inspect Hive table
         val table_1 = session.catalog.getTable(TableIdentifier("lala_1", Some("default")))
-        table_1.identifier should be (TableIdentifier("lala_1", Some("default")).toSpark)
-        table_1.tableType should be (CatalogTableType.MANAGED)
-        table_1.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType),
-            StructField("partition_col", StringType, nullable = false)
+        table_1.identifier should be (TableIdentifier("lala_1", Some("default")))
+        table_1.tableType should be (TableType.TABLE)
+        table_1.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType),
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
-        table_1.dataSchema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType)
+        table_1.dataSchema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType)
         )))
         table_1.partitionColumnNames should be (Seq("partition_col"))
-        table_1.partitionSchema should be (StructType(Seq(
-            StructField("partition_col", StringType, nullable = false)
+        table_1.partitionSchema should be (ftypes.StructType(Seq(
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
 
         // == Write ===================================================================================================
         val rdd = spark.sparkContext.parallelize(Seq(
             Row("v1", 21)
         ))
-        val df = spark.createDataFrame(rdd, table_1.dataSchema)
+        val df = spark.createDataFrame(rdd, table_1.dataSchema.sparkType)
         relation_1.write(execution, df, Map("partition_col" -> SingleValue("part_1")))
 
         // == Migrate =================================================================================================
@@ -917,10 +917,10 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val view_2 = session.catalog.getTable(TableIdentifier("lala", Some("default")))
         view_2.provider should be (None)
         view_2.comment should be (None)
-        view_2.identifier should be (TableIdentifier("lala", Some("default")).toSpark)
-        view_2.tableType should be (CatalogTableType.VIEW)
+        view_2.identifier should be (TableIdentifier("lala", Some("default")))
+        view_2.tableType should be (TableType.VIEW)
         if (hiveVarcharSupported) {
-            SchemaUtils.dropMetadata(view_2.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(view_2.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("char_col", CharType(10)),
                 StructField("int_col", IntegerType),
@@ -928,67 +928,67 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
             )))
         }
         else {
-            view_2.schema should be(StructType(Seq(
-                StructField("str_col", StringType),
-                StructField("char_col", StringType),
-                StructField("int_col", IntegerType),
-                StructField("partition_col", StringType)
+            view_2.schema should be (ftypes.StructType(Seq(
+                Field("str_col", ftypes.StringType),
+                Field("char_col", ftypes.StringType),
+                Field("int_col", ftypes.IntegerType),
+                Field("partition_col", ftypes.StringType)
             )))
         }
         view_2.partitionColumnNames should be (Seq())
-        view_2.partitionSchema should be (StructType(Nil))
+        view_2.partitionSchema should be (ftypes.StructType(Seq()))
 
         // Inspect Hive table
         val table_2 = session.catalog.getTable(TableIdentifier("lala_1", Some("default")))
-        table_2.identifier should be (TableIdentifier("lala_1", Some("default")).toSpark)
-        table_2.tableType should be (CatalogTableType.MANAGED)
+        table_2.identifier should be (TableIdentifier("lala_1", Some("default")))
+        table_2.tableType should be (TableType.TABLE)
         if (hiveVarcharSupported) {
-            SchemaUtils.dropMetadata(table_2.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(table_2.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", CharType(10)),
                 StructField("partition_col", StringType, nullable = false)
             )))
-            SchemaUtils.dropMetadata(table_2.dataSchema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(table_2.dataSchema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", CharType(10))
             )))
         }
         else {
-            SchemaUtils.dropMetadata(table_2.schema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(table_2.schema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", StringType),
                 StructField("partition_col", StringType, nullable = false)
             )))
-            SchemaUtils.dropMetadata(table_2.dataSchema) should be(StructType(Seq(
+            SchemaUtils.dropMetadata(table_2.dataSchema.catalogType) should be(StructType(Seq(
                 StructField("str_col", StringType),
                 StructField("int_col", IntegerType),
                 StructField("char_col", StringType)
             )))
         }
-        SchemaUtils.recoverCharVarchar(table_2.schema) should be (StructType(Seq(
+        SchemaUtils.recoverCharVarchar(table_2.schema.catalogType) should be (StructType(Seq(
             StructField("str_col", StringType),
             StructField("int_col", IntegerType),
             StructField("char_col", CharType(10)),
             StructField("partition_col", StringType, nullable = false)
         )))
-        SchemaUtils.recoverCharVarchar(table_2.dataSchema) should be (StructType(Seq(
+        SchemaUtils.recoverCharVarchar(table_2.dataSchema.catalogType) should be (StructType(Seq(
             StructField("str_col", StringType),
             StructField("int_col", IntegerType),
             StructField("char_col", CharType(10))
         )))
         table_2.partitionColumnNames should be (Seq("partition_col"))
-        table_2.partitionSchema should be (StructType(Seq(
-            StructField("partition_col", StringType, nullable = false)
+        table_2.partitionSchema should be (ftypes.StructType(Seq(
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
 
         // == Write ===================================================================================================
         val rdd_2 = spark.sparkContext.parallelize(Seq(
             Row("v2", 22, "lala")
         ))
-        val df2 = spark.createDataFrame(rdd_2, SchemaUtils.replaceCharVarchar(table_2.dataSchema))
+        val df2 = spark.createDataFrame(rdd_2, SchemaUtils.replaceCharVarchar(table_2.dataSchema.catalogType))
         relation_2.write(execution, df2, Map("partition_col" -> SingleValue("part_2")))
 
         // == Read ====================================================================================================
@@ -1006,7 +1006,7 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val rdd_2a = spark.sparkContext.parallelize(Seq(
             Row("v3", 23, "lala")
         ))
-        val df2a = spark.createDataFrame(rdd_2a, SchemaUtils.replaceCharVarchar(table_2.dataSchema))
+        val df2a = spark.createDataFrame(rdd_2a, SchemaUtils.replaceCharVarchar(table_2.dataSchema.catalogType))
         relation_2.write(execution, df2a, Map("partition_col" -> SingleValue("part_2")))
 
         // == Read ====================================================================================================
@@ -1114,39 +1114,39 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val view_1 = session.catalog.getTable(TableIdentifier("lala", Some("default")))
         view_1.provider should be (None)
         view_1.comment should be (None)
-        view_1.identifier should be (TableIdentifier("lala", Some("default")).toSpark)
-        view_1.tableType should be (CatalogTableType.VIEW)
-        view_1.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType),
-            StructField("partition_col", StringType)
+        view_1.identifier should be (TableIdentifier("lala", Some("default")))
+        view_1.tableType should be (TableType.VIEW)
+        view_1.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType),
+            Field("partition_col", ftypes.StringType)
         )))
         view_1.partitionColumnNames should be (Seq())
-        view_1.partitionSchema should be (StructType(Nil))
+        view_1.partitionSchema should be (ftypes.StructType(Seq()))
 
         // Inspect Hive table
         val table_1 = session.catalog.getTable(TableIdentifier("lala_1", Some("default")))
-        table_1.identifier should be (TableIdentifier("lala_1", Some("default")).toSpark)
-        table_1.tableType should be (CatalogTableType.MANAGED)
-        table_1.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType),
-            StructField("partition_col", StringType, nullable = false)
+        table_1.identifier should be (TableIdentifier("lala_1", Some("default")))
+        table_1.tableType should be (TableType.TABLE)
+        table_1.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType),
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
-        table_1.dataSchema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", IntegerType)
+        table_1.dataSchema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.IntegerType)
         )))
         table_1.partitionColumnNames should be (Seq("partition_col"))
-        table_1.partitionSchema should be (StructType(Seq(
-            StructField("partition_col", StringType, nullable = false)
+        table_1.partitionSchema should be (ftypes.StructType(Seq(
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
 
         // == Write ===================================================================================================
         val rdd_1 = spark.sparkContext.parallelize(Seq(
             Row("v1", 21)
         ))
-        val df_1 = spark.createDataFrame(rdd_1, table_1.dataSchema)
+        val df_1 = spark.createDataFrame(rdd_1, table_1.dataSchema.sparkType)
         relation_1.write(execution, df_1, Map("partition_col" -> SingleValue("part_1")))
 
         // == Migrate =================================================================================================
@@ -1167,40 +1167,39 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val view_2 = session.catalog.getTable(TableIdentifier("lala", Some("default")))
         view_2.provider should be (None)
         view_2.comment should be (None)
-        view_2.identifier should be (TableIdentifier("lala", Some("default")).toSpark)
-        view_2.tableType should be (CatalogTableType.VIEW)
-        view_2.schema should be (StructType(
-            StructField("str_col", StringType) ::
-                StructField("int_col", BooleanType) ::
-                StructField("partition_col", StringType) ::
-                Nil
-        ))
+        view_2.identifier should be (TableIdentifier("lala", Some("default")))
+        view_2.tableType should be (TableType.VIEW)
+        view_2.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.BooleanType),
+            Field("partition_col", ftypes.StringType)
+        )))
         view_2.partitionColumnNames should be (Seq())
-        view_2.partitionSchema should be (StructType(Nil))
+        view_2.partitionSchema should be (ftypes.StructType(Seq()))
 
         // Inspect Hive table
         val table_2 = session.catalog.getTable(TableIdentifier("lala_2", Some("default")))
-        table_2.identifier should be (TableIdentifier("lala_2", Some("default")).toSpark)
-        table_2.tableType should be (CatalogTableType.MANAGED)
-        table_2.schema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", BooleanType),
-            StructField("partition_col", StringType, nullable = false)
+        table_2.identifier should be (TableIdentifier("lala_2", Some("default")))
+        table_2.tableType should be (TableType.TABLE)
+        table_2.schema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.BooleanType),
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
-        table_2.dataSchema should be (StructType(Seq(
-            StructField("str_col", StringType),
-            StructField("int_col", BooleanType)
+        table_2.dataSchema should be (ftypes.StructType(Seq(
+            Field("str_col", ftypes.StringType),
+            Field("int_col", ftypes.BooleanType)
         )))
         table_2.partitionColumnNames should be (Seq("partition_col"))
-        table_2.partitionSchema should be (StructType(Seq(
-            StructField("partition_col", StringType, nullable = false)
+        table_2.partitionSchema should be (ftypes.StructType(Seq(
+            Field("partition_col", ftypes.StringType, nullable = false)
         )))
 
         // == Write ===================================================================================================
         val rdd_2 = spark.sparkContext.parallelize(Seq(
             Row("v2", true)
         ))
-        val df_2 = spark.createDataFrame(rdd_2, table_2.dataSchema)
+        val df_2 = spark.createDataFrame(rdd_2, table_2.dataSchema.sparkType)
         relation_2.write(execution, df_2, Map("partition_col" -> SingleValue("part_2")))
 
         // == Read ====================================================================================================
@@ -1218,7 +1217,7 @@ class HiveUnionTableRelationTest extends AnyFlatSpec with Matchers with LocalSpa
         val rdd_1a = spark.sparkContext.parallelize(Seq(
             Row("v3", false)
         ))
-        val df_1a = spark.createDataFrame(rdd_1a, table_2.dataSchema)
+        val df_1a = spark.createDataFrame(rdd_1a, table_2.dataSchema.sparkType)
         relation_2.write(execution, df_1a, Map("partition_col" -> SingleValue("part_1")))
 
         // == Read ====================================================================================================

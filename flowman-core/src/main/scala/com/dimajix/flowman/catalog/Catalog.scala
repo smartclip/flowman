@@ -22,11 +22,9 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchDatabaseException
 import org.apache.spark.sql.catalyst.analysis.NoSuchPartitionException
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
-import org.apache.spark.sql.catalyst.catalog.CatalogTable
-import org.apache.spark.sql.catalyst.catalog.CatalogTablePartition
-import org.apache.spark.sql.types.StructField
 
 import com.dimajix.flowman.model.PartitionSchema
+import com.dimajix.flowman.types.Field
 
 
 /**
@@ -99,7 +97,7 @@ trait Catalog {
       */
     @throws[NoSuchDatabaseException]
     @throws[TableAlreadyExistsException]
-    def createTable(table:CatalogTable, ignoreIfExists:Boolean) : Unit
+    def createTable(table:TableDefinition, ignoreIfExists:Boolean) : Unit
 
     /**
       * Refreshes any meta information about a table. This might be required either when the schema changes
@@ -124,7 +122,7 @@ trait Catalog {
       */
     @throws[NoSuchDatabaseException]
     @throws[NoSuchTableException]
-    def getTable(name:TableIdentifier) : CatalogTable
+    def getTable(name:TableIdentifier) : TableDefinition
 
     /**
       * Returns the storage location of a Hive table
@@ -168,7 +166,7 @@ trait Catalog {
       */
     @throws[NoSuchDatabaseException]
     @throws[NoSuchTableException]
-    def addTableColumns(table:TableIdentifier, colsToAdd:Seq[StructField]) : Unit
+    def addTableColumns(table:TableIdentifier, colsToAdd:Seq[Field]) : Unit
 
     /**
       * Checks if the given partition exists
@@ -189,7 +187,7 @@ trait Catalog {
     @throws[NoSuchDatabaseException]
     @throws[NoSuchTableException]
     @throws[NoSuchPartitionException]
-    def getPartition(table:TableIdentifier, partition:PartitionSpec) : CatalogTablePartition
+    def getPartition(table:TableIdentifier, partition:PartitionSpec) : PartitionDefinition
 
     /**
       * Returns the storage location of a single partition of a Hive table
