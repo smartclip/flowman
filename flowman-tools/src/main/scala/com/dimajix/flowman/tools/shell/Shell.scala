@@ -147,7 +147,7 @@ class Shell(args:Arguments) extends StatefulTool(
         val signalHandler = new Terminal.SignalHandler {
             override def handle(signal: Terminal.Signal): Unit = {
                 writer.println("Aborting all Spark jobs on user request")
-                session.spark.sparkContext.cancelAllJobs()
+                session.backend.cancelAllJobs()
             }
         }
         //terminal.handle(Signal.INT, signalHandler)

@@ -30,7 +30,6 @@ import com.dimajix.flowman.model.AssertionTestResult
 import com.dimajix.flowman.model.BaseAssertion
 import com.dimajix.flowman.model.MappingOutputIdentifier
 import com.dimajix.flowman.model.ResourceIdentifier
-import com.dimajix.spark.SparkUtils
 import com.dimajix.spark.sql.DataFrameUtils
 import com.dimajix.spark.sql.SqlParser
 
@@ -100,12 +99,11 @@ case class SqlAssertion(
         AssertionResult.of(this) {
             DataFrameUtils.withTempViews(rawDependencies.map(d => d -> input(MappingOutputIdentifier(d)))) {
                 // Store job group and description of current thread
-                val sc = execution.spark.sparkContext
-                val (jobGroupId, jobDescription) = SparkUtils.getJobGroup(sc)
+                val (jobGroupId, jobDescription) = execution.backend.getJobGroup
 
                 tests.par.map { test =>
                     // Propagate job group and description to current thread
-                    SparkUtils.withJobGroup(sc, jobGroupId, jobDescription) {
+                    execution.backend.withJobGroup(jobGroupId, jobDescription) {
                         // Execute query
                         val sql = test.sql
 

@@ -55,8 +55,7 @@ object DataFrameBuilder {
      * @return
      */
     def ofSchema(sparkSession: SparkSession, schema:StructType) : DataFrame = {
-        val rdd = sparkSession.sparkContext.emptyRDD[Row]
-        sparkSession.createDataFrame(rdd, schema)
+        ofRows(sparkSession, Seq.empty[Row], schema)
     }
 
     /**

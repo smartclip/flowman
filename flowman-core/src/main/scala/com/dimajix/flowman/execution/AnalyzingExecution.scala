@@ -23,7 +23,7 @@ import org.slf4j.ILoggerFactory
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-import com.dimajix.flowman.catalog.HiveCatalog
+import com.dimajix.flowman.catalog.Catalog
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.documentation.Documenter
 import com.dimajix.flowman.fs.FileSystem
@@ -83,7 +83,7 @@ final class AnalyzingExecution(context: Context) extends CachingExecution(None, 
      *
      * @return
      */
-    override def catalog: HiveCatalog = throw new UnsupportedOperationException
+    override def catalog: Catalog = throw new UnsupportedOperationException
 
     /**
      * Executes a specific phase of a target, will also catch (non-fatal) exceptions

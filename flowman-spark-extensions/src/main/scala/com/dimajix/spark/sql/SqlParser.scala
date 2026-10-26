@@ -16,6 +16,8 @@
 
 package com.dimajix.spark.sql
 
+import java.util.Locale
+
 import org.apache.spark.sql.catalyst.analysis.UnresolvedRelation
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -82,5 +84,65 @@ object SqlParser {
             .toSet
 
         tables ++ cteDependencies
+    }
+
+    /**
+      * Returns the index of the first top level `UNION` keyword in the given SQL statement. A top level keyword is
+      * one which is neither nested inside parentheses nor inside a string literal or quoted identifier. This provides
+      * a client side (and therefore Spark Connect compatible) alternative to parsing the SQL statement into a
+      * [[LogicalPlan]] and looking for a [[org.apache.spark.sql.catalyst.plans.logical.Union]] node. Returns `-1` if no
+      * such keyword is present.
+      */
+    def findTopLevelUnion(sql:String) : Int = {
+        var depth = 0
+        var inSingleQuote = false
+        var inDoubleQuote = false
+        var inBacktick = false
+        var i = 0
+        while (i < sql.length) {
+            val c = sql.charAt(i)
+            if (inSingleQuote) {
+                if (c == '\'') {
+                    if (i + 1 < sql.length && sql.charAt(i+1) == '\'')
+                        i += 1
+                    else
+                        inSingleQuote = false
+                }
+            }
+            else if (inDoubleQuote) {
+                if (c == '"') {
+                    if (i + 1 < sql.length && sql.charAt(i+1) == '"')
+                        i += 1
+                    else
+                        inDoubleQuote = false
+                }
+            }
+            else if (inBacktick) {
+                if (c == '`')
+                    inBacktick = false
+            }
+            else {
+                c match {
+                    case '\'' => inSingleQuote = true
+                    case '"' => inDoubleQuote = true
+                    case '`' => inBacktick = true
+                    case '(' => depth += 1
+                    case ')' => depth -= 1
+                    case u if depth == 0 && (u == 'u' || u == 'U') =>
+                        // Detect a UNION keyword (possibly followed by ALL or DISTINCT)
+                        val end = Math.min(sql.length, i + 5)
+                        if (sql.substring(i, end).toUpperCase(Locale.ROOT) == "UNION") {
+                            val prev = if (i > 0) sql.charAt(i-1) else ' '
+                            val after = if (end < sql.length) sql.charAt(end) else ' '
+                            if (!prev.isLetterOrDigit && !after.isLetterOrDigit)
+                                return i
+                        }
+                        i += 4
+                    case _ =>
+                }
+            }
+            i += 1
+        }
+        -1
     }
 }

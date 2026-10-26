@@ -19,7 +19,6 @@ package com.dimajix.flowman.spec.mapping
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.Row
 
 import com.dimajix.jackson.ListMapDeserializer
 
@@ -33,6 +32,7 @@ import com.dimajix.flowman.spec.schema.SchemaSpec
 import com.dimajix.flowman.types.Field
 import com.dimajix.flowman.types.FieldType
 import com.dimajix.flowman.types.StructType
+import com.dimajix.spark.sql.DataFrameBuilder
 
 
 final case class EmptyMapping(
@@ -65,8 +65,7 @@ final case class EmptyMapping(
      * @return
      */
     override def execute(execution: Execution, input: Map[MappingOutputIdentifier, DataFrame]): Map[String, DataFrame] = {
-        val rdd = execution.spark.sparkContext.emptyRDD[Row]
-        val df = execution.spark.createDataFrame(rdd, sparkSchema)
+        val df = DataFrameBuilder.ofSchema(execution.spark, sparkSchema)
 
         Map("main" -> df)
     }

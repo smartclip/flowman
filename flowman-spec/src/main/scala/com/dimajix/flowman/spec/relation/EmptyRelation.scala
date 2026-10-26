@@ -18,7 +18,6 @@ package com.dimajix.flowman.spec.relation
 
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.types.StructType
 
 import com.dimajix.common.Trilean
@@ -38,6 +37,7 @@ import com.dimajix.flowman.model.SchemaRelation
 import com.dimajix.flowman.types
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
+import com.dimajix.spark.sql.DataFrameBuilder
 
 
 final case class EmptyRelation(
@@ -75,8 +75,7 @@ final case class EmptyRelation(
         if (readSchema.isEmpty)
             throw new IllegalArgumentException("Null relation needs a schema for reading")
 
-        val rdd = execution.spark.sparkContext.emptyRDD[Row]
-        execution.spark.createDataFrame(rdd, readSchema.get)
+        DataFrameBuilder.ofSchema(execution.spark, readSchema.get)
     }
 
     /**

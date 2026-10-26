@@ -28,6 +28,7 @@ import org.apache.velocity.VelocityContext
 import org.slf4j.LoggerFactory
 
 import com.dimajix.flowman.catalog.PartitionSpec
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.templating.Velocity
 
 
@@ -40,7 +41,7 @@ object FileCollector {
         private var _context:VelocityContext = _
 
         def this(spark:SparkSession) = {
-            this(new FileSystem(spark.sparkContext.hadoopConfiguration))
+            this(new FileSystem(SparkBackend.of(spark).hadoopConf))
         }
 
         /**

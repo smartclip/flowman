@@ -27,7 +27,7 @@ import org.apache.spark.sql.SparkSession
 import org.slf4j.ILoggerFactory
 import org.slf4j.LoggerFactory
 
-import com.dimajix.flowman.catalog.HiveCatalog
+import com.dimajix.flowman.catalog.Catalog
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.documentation.Documenter
 import com.dimajix.flowman.fs.FileSystem
@@ -92,9 +92,17 @@ abstract class Execution {
     def spark: SparkSession
 
     /**
-     * Returns the FlowmanConf object, which contains all Flowman settings.
-     * @return
-     */
+      * Returns the Spark execution backend (classic or Connect) of this execution, which determines the available
+      * calling conventions for Spark.
+      *
+      * @return
+      */
+    def backend : SparkBackend = SparkBackend.of(spark)
+
+    /**
+      * Returns the FlowmanConf object, which contains all Flowman settings.
+      * @return
+      */
     def flowmanConf : FlowmanConf
 
     /**
@@ -106,14 +114,14 @@ abstract class Execution {
       * Returns the Hadoop configuration as used by Spark
       * @return
       */
-    def hadoopConf : Configuration = spark.sparkContext.hadoopConfiguration
+    def hadoopConf : Configuration = backend.hadoopConf
 
     /**
-      * Returns the table catalog used for managing Hive table instances. The HiveCatalog will take care of many
+      * Returns the table catalog used for managing Hive table instances. The Catalog will take care of many
       * technical details, like refreshing additional external catalogs like Impala.
       * @return
       */
-    def catalog: HiveCatalog
+    def catalog: Catalog
 
     /**
      * Returns the [[ActivityManager]] of this execution, which should be the instance created by the [[Session]]

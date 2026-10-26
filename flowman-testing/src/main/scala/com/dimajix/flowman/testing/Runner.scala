@@ -32,6 +32,7 @@ import org.apache.spark.sql.internal.SQLConf
 import com.dimajix.flowman.common.Logging
 import com.dimajix.flowman.execution.Phase
 import com.dimajix.flowman.execution.Session
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.fs.FileSystem
 import com.dimajix.flowman.model.Job
 import com.dimajix.flowman.model.JobIdentifier
@@ -359,9 +360,12 @@ class Runner private(
             builder.enableHiveSupport()
 
         val spark = builder.getOrCreate()
-        val sc = spark.sparkContext
-        sc.setLogLevel("WARN")
-        sc.setCheckpointDir(checkpointPath)
+        val backend = SparkBackend.of(spark)
+        if (!backend.isConnect) {
+            val sc = spark.sparkContext
+            sc.setLogLevel("WARN")
+        }
+        backend.setCheckpointDir(checkpointPath)
 
         // Perform one Spark operation, this help to fix some race conditions with frequent setup/teardown
         spark.emptyDataFrame.count()

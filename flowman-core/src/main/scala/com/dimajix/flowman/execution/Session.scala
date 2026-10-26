@@ -25,7 +25,8 @@ import org.apache.spark.sql.SparkShim
 import org.slf4j.ILoggerFactory
 import org.slf4j.LoggerFactory
 
-import com.dimajix.flowman.catalog.HiveCatalog
+import com.dimajix.flowman.catalog.Catalog
+import com.dimajix.flowman.catalog.ClassicHiveCatalog
 import com.dimajix.flowman.config.Configuration
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.execution.Session.builder
@@ -42,11 +43,8 @@ import com.dimajix.flowman.model.Prototype
 import com.dimajix.flowman.model.SessionWrapper
 import com.dimajix.flowman.spi.LogFilter
 import com.dimajix.flowman.spi.SparkExtension
-import com.dimajix.flowman.spi.UdfProvider
 import com.dimajix.flowman.storage.NullStore
 import com.dimajix.flowman.storage.Store
-import com.dimajix.spark.sql.catalyst.optimizer.ExtraOptimizations
-import com.dimajix.spark.sql.execution.ExtraStrategies
 
 
 object Session {
@@ -382,6 +380,7 @@ final class Session private[execution](
         SparkExtension.extensions.foldLeft(sessionBuilder)((builder, ext) => ext.register(builder, config))
 
         val spark = _createSparkSession(sessionBuilder)
+        _backend = SparkBackend.of(spark)
         // Set all session properties that can be changed in an existing session
         sparkConf.getAll.foreach { case (key, value) =>
             if (!SparkShim.isStaticConf(key)) {
@@ -393,25 +392,21 @@ final class Session private[execution](
         }
 
         // Set checkpoint directory if not already specified
-        if (spark.sparkContext.getCheckpointDir.isEmpty) {
-            spark.sparkContext.getConf.getOption("spark.checkpoint.dir").foreach(spark.sparkContext.setCheckpointDir)
+        if (_backend.checkpointDir.isEmpty) {
+            spark.conf.getOption("spark.checkpoint.dir").foreach(_backend.setCheckpointDir)
         }
 
-        if (flowmanConf.getConf(FlowmanConf.SPARK_EAGER_CACHE)) {
-            ExtraOptimizations.enableEagerCache(spark)
-        }
-
-        // Register additional planning strategies
-        ExtraStrategies.register(spark)
+        // Register additional planning strategies and optimizations
+        _backend.registerStrategies(flowmanConf.getConf(FlowmanConf.SPARK_EAGER_CACHE))
 
         // Apply all session extensions
         SparkExtension.extensions.foreach(_.register(spark, config))
 
-        // Register special UDFs
-        UdfProvider.providers.foreach(_.register(spark.udf, config))
+        // Register special UDFs and extension hooks
+        _backend.registerExtension(config)
 
         // Distribute additional Plugin jar files
-        sparkJars.foreach(spark.sparkContext.addJar)
+        sparkJars.foreach(_backend.addJar)
 
         // Log all config properties
         logger.info("Spark configuration:")
@@ -429,6 +424,7 @@ final class Session private[execution](
         spark
     }
     private var sparkSession:SparkSession = null
+    private var _backend:SparkBackend = null
 
     private var sessionCleaner:SessionCleaner = null
 
@@ -538,7 +534,7 @@ final class Session private[execution](
 
     private lazy val _catalog = {
         val externalCatalogs = _namespace.toSeq.flatMap(_.catalogs).map(_.instantiate(namespaceContext))
-        new HiveCatalog(spark, config, externalCatalogs)
+        new ClassicHiveCatalog(spark, config, externalCatalogs)
     }
 
     private lazy val _projectStore : Store = {
@@ -647,10 +643,20 @@ final class Session private[execution](
     }
 
     /**
-      * Returns a [[HiveCatalog]] for managing Hive tables
+      * Returns the Spark execution backend (classic or Connect) of this Flowman session. This will either be derived
+      * from the Spark session which was created by the Flowman session, or which was provided in the builder.
       * @return
       */
-    def catalog : HiveCatalog = _catalog
+    def backend : SparkBackend = {
+        spark
+        _backend
+    }
+
+    /**
+      * Returns a [[Catalog]] for managing Hive tables
+      * @return
+      */
+    def catalog : Catalog = _catalog
 
     /**
       * Returns true if a SparkSession is already available

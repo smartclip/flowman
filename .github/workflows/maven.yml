@@ -38,6 +38,8 @@ jobs:
         node-version: '18'
     - name: Build with Maven
       run: mvn -B package --file pom.xml -Ddockerfile.skip -Dgpg.skip=true
+    - name: Check for new classic Spark API usage
+      run: devtools/ci/check-no-classic-spark.sh
 
     # Optional: Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
     - name: Update dependency graph

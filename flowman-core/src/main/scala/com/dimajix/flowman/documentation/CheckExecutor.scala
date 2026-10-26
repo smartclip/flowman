@@ -31,8 +31,6 @@ import com.dimajix.flowman.model.Mapping
 import com.dimajix.flowman.model.Relation
 import com.dimajix.flowman.spi.ColumnCheckExecutor
 import com.dimajix.flowman.spi.SchemaCheckExecutor
-import com.dimajix.spark.SparkUtils
-import com.dimajix.spark.SparkUtils.withJobGroup
 
 
 class CheckExecutor(execution: Execution) {
@@ -125,7 +123,7 @@ class CheckExecutor(execution: Execution) {
     private def runAllChecks(context:Context, df:DataFrame, schema:SchemaDoc) : SchemaDoc = {
         val parallelism = context.flowmanConf.getConf(FlowmanConf.EXECUTION_CHECK_PARALLELISM)
         // Get current Spark JobGroup and JobDescription to pass to other threads
-        implicit val jobGroup: (String, String) = SparkUtils.getJobGroup(execution.spark.sparkContext)
+        implicit val jobGroup: (String, String) = execution.backend.getJobGroup
 
         try {
             val columnChecks = runColumnChecks(context, df, schema.columns, parallelism)
@@ -140,7 +138,7 @@ class CheckExecutor(execution: Execution) {
 
     private def runSchemaChecks(context:Context, df:DataFrame, schema:SchemaDoc, parallelism:Int)(implicit jobGroup:(String,String)) : SchemaDoc = {
         val tests = ThreadUtils.parmap(schema.checks, "schema-checks", parallelism) { test =>
-            withJobGroup(df.sparkSession.sparkContext, jobGroup._1, jobGroup._2) {
+            execution.backend.withJobGroup(jobGroup._1, jobGroup._2) {
                 runSchemaCheck(context, df, test)
             }
         }
@@ -175,7 +173,7 @@ class CheckExecutor(execution: Execution) {
     private def runColumnChecks(context:Context, df:DataFrame, column:ColumnDoc, parallelism:Int, path:String)(implicit jobGroup:(String,String)) : ColumnDoc = {
         val columnPath = path + column.name
         val tests = ThreadUtils.parmap(column.checks, "column-tests", parallelism) { test =>
-            withJobGroup(df.sparkSession.sparkContext, jobGroup._1, jobGroup._2) {
+            execution.backend.withJobGroup(jobGroup._1, jobGroup._2) {
                 runColumnCheck(context, df, test, columnPath)
             }
         }

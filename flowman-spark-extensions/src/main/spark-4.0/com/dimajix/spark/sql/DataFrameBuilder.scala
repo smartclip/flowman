@@ -21,6 +21,8 @@ import scala.collection.JavaConverters._
 import org.apache.spark.sql.{DataFrame, Dataset, Row, SparkSession}
 import org.apache.spark.sql.classic.{SparkSession => ClassicSparkSession,DataFrameBridge}
 import org.apache.spark.sql.SparkShim.expressionEncoderFor
+import org.apache.spark.sql.catalyst.CatalystTypeConverters
+import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.types.StructType
 import com.dimajix.spark.sql.catalyst.PlanUtils
@@ -52,8 +54,7 @@ object DataFrameBuilder {
      * @return
      */
     def ofSchema(sparkSession: SparkSession, schema:StructType) : DataFrame = {
-        val rdd = sparkSession.sparkContext.emptyRDD[Row]
-        sparkSession.createDataFrame(rdd, schema)
+        ofRows(sparkSession, Seq.empty[Row], schema)
     }
 
     /**
@@ -89,9 +90,21 @@ object DataFrameBuilder {
      * @return
      */
     def singleRow(sparkSession: SparkSession, schema: StructType): DataFrame = {
-        val logicalPlan = PlanUtils.singleRowPlan(schema)
-
-        DataFrameBridge.ofRows(sparkSession.asInstanceOf[ClassicSparkSession], logicalPlan)
+        if (sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession") {
+            // Build a single Row with NULL values or default values. The classic path constructs a logical plan
+            // which is not supported in Spark Connect, therefore a plain createDataFrame is used instead.
+            val values = schema.fields.map { field =>
+                if (field.nullable)
+                    null
+                else
+                    CatalystTypeConverters.convertToScala(Literal.default(field.dataType).value, field.dataType)
+            }
+            sparkSession.createDataFrame(Seq(Row.fromSeq(values)).asJava, schema)
+        }
+        else {
+            val logicalPlan = PlanUtils.singleRowPlan(schema)
+            DataFrameBridge.ofRows(sparkSession.asInstanceOf[ClassicSparkSession], logicalPlan)
+        }
     }
 
     /**

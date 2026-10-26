@@ -27,10 +27,9 @@ import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.Phase
 import com.dimajix.flowman.graph.Linker
-import com.dimajix.flowman.metric.LongAccumulatorMetric
 import com.dimajix.flowman.metric.MultiMetricBundle
 import com.dimajix.flowman.model
-import com.dimajix.spark.sql.functions.count_records
+import com.dimajix.flowman.types.StructType
 
 
 sealed abstract class VerifyPolicy extends Product with Serializable
@@ -433,11 +432,8 @@ abstract class BaseTarget extends AbstractInstance with Target with Logging {
 
         val metricName = "target_records"
         val bundle = MultiMetricBundle.forMetadata(registry, metricName, metadata, phase)
-        lazy val newCounter = execution.spark.sparkContext.longAccumulator
         val metricLabels = bundle.labels ++ metadata.asMap
-        val metric = bundle.getOrCreateMetric(metricName, metricLabels, LongAccumulatorMetric(metricName, metricLabels, newCounter))
 
-        val counter = metric.counter
-        count_records(df, counter)
+        execution.backend.countRecords(df, bundle, metricName, metricLabels)
     }
 }

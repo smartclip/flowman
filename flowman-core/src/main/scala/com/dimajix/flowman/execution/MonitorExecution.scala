@@ -21,7 +21,7 @@ import org.apache.spark.sql.SparkSession
 import org.slf4j.ILoggerFactory
 import org.slf4j.Logger
 
-import com.dimajix.flowman.catalog.HiveCatalog
+import com.dimajix.flowman.catalog.Catalog
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.fs.FileSystem
 import com.dimajix.flowman.metric.MetricBoard
@@ -66,12 +66,12 @@ final class MonitorExecution(parent:Execution, override val listeners:Seq[(Execu
     override def flowmanConf: FlowmanConf = parent.flowmanConf
 
     /**
-     * Returns the table catalog used for managing Hive table instances. The HiveCatalog will take care of many
+     * Returns the table catalog used for managing Hive table instances. The Catalog will take care of many
      * technical details, like refreshing additional external catalogs like Impala.
      *
      * @return
      */
-    override def catalog: HiveCatalog = parent.catalog
+    override def catalog: Catalog = parent.catalog
 
     /**
      * Returns the [[ActivityManager]] of this execution, which should be the instance created by the [[Session]]

@@ -109,13 +109,14 @@ object HiveCatalog {
 }
 
 /**
- * The HiveCatalog is a wrapper around the Spark external catalog, which mainly contains Hive tables.
+ * The ClassicHiveCatalog is a wrapper around the Spark external catalog, which mainly contains Hive tables.
+ * It uses the classic Spark API (SessionState and SparkContext) and is not available on a Spark Connect client.
  * @param spark
  * @param config
  * @param externalCatalogs
  */
-final class HiveCatalog(val spark:SparkSession, val config:Configuration, val externalCatalogs: Seq[ExternalCatalog] = Seq()) {
-    private val logger = LoggerFactory.getLogger(classOf[HiveCatalog])
+final class ClassicHiveCatalog(val spark:SparkSession, val config:Configuration, val externalCatalogs: Seq[ExternalCatalog] = Seq()) extends Catalog {
+    private val logger = LoggerFactory.getLogger(classOf[ClassicHiveCatalog])
     private val catalog = spark.sessionState.catalog
     private val hadoopConf = spark.sparkContext.hadoopConfiguration
 

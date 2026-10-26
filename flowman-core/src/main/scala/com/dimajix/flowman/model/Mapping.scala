@@ -387,7 +387,11 @@ abstract class BaseMapping extends AbstractInstance with Mapping with Logging {
         val results = execute(execution, replacements)
 
         // Extract schemas
-        val schemas = results.map { case (name,df) => name -> extractSchema(df) }
+        val schemas =
+            if (execution.backend.isConnect)
+                results.map { case (name,df) => name -> StructType.of(df.schema) }
+            else
+                results.map { case (name,df) => name -> extractSchema(df) }
 
         // Apply documentation
         applyDocumentation(schemas)

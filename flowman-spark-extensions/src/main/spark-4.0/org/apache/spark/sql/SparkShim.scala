@@ -40,7 +40,6 @@ import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog
 import org.apache.spark.sql.catalyst.encoders.ExpressionEncoder
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
-import org.apache.spark.sql.catalyst.expressions.Alias
 import org.apache.spark.sql.catalyst.expressions.And
 import org.apache.spark.sql.catalyst.expressions.AttributeReference
 import org.apache.spark.sql.catalyst.expressions.EqualNullSafe
@@ -309,7 +308,12 @@ object SparkShim {
     }
 
     def alias(col: Column, alias: String, metadata: Metadata, nonInheritableMetadataKeys: Seq[String]): Column = {
-        column(Alias(expr(col), alias)(explicitMetadata = Some(metadata), nonInheritableMetadataKeys = nonInheritableMetadataKeys))
+        // The classic implementation builds a raw catalyst `Alias` expression. In Spark Connect, such an
+        // expression would be wrapped in an `ExpressionColumnNode`, which cannot be serialized to the server.
+        // Using the public `Column.as(alias, metadata)` instead delegates to the mode-appropriate factory and
+        // therefore works both in classic and in Connect mode. Note: this looses control over the
+        // `nonInheritableMetadataKeys`.
+        col.as(alias, metadata)
     }
 
     def observe[T](ds:Dataset[T], name: String, expr: Column, exprs: Column*) : Dataset[T] = {

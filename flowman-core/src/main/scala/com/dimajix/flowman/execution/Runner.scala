@@ -55,7 +55,6 @@ import com.dimajix.flowman.model.TargetResult
 import com.dimajix.flowman.model.Test
 import com.dimajix.flowman.model.TestWrapper
 import com.dimajix.flowman.spi.LogFilter
-import com.dimajix.spark.SparkUtils.withJobGroup
 
 
 private[execution] sealed class RunnerImpl(runner: Runner) {
@@ -388,8 +387,7 @@ private[execution] final class JobRunnerImpl(runner:Runner) extends RunnerImpl(r
         dirtyManager.taint(dirtyFilter _)
 
         executor.execute(phase, jobTargets, targetFilter, keepGoing) { (execution, target, phase) =>
-            val sc = execution.spark.sparkContext
-            withJobGroup(sc, target.name, s"$phase target ${target.identifier}") {
+            execution.backend.withJobGroup(target.name, s"$phase target ${target.identifier}") {
                 val dirty = dirtyManager.isDirty(target)
                 val result = executeTargetPhase(execution, target, phase, force || dirty, dryRun, ignoreHistory)
                 if (result.status == Status.SUCCESS) {
@@ -521,8 +519,7 @@ private[execution] final class TestRunnerImpl(runner:Runner) extends RunnerImpl(
                 // Now run tests if fixtures where successful
                 val testStatus =
                     if (buildStatus == Status.SUCCESS || keepGoing) {
-                        val sc = execution.spark.sparkContext
-                        withJobGroup(sc, test.name, s"EXECUTE test ${test.identifier}") {
+                        execution.backend.withJobGroup(test.name, s"EXECUTE test ${test.identifier}") {
                             executeTestAssertions(execution, context, test, keepGoing, dryRun)
                         }
                     }
@@ -591,8 +588,7 @@ private[execution] final class TestRunnerImpl(runner:Runner) extends RunnerImpl(
         val executor = Executor.newInstance(clazz, execution, context)
 
         executor.execute(phase, targets, _ => true, keepGoing) { (execution, target, phase) =>
-            val sc = execution.spark.sparkContext
-            withJobGroup(sc, target.name, s"$phase target ${target.identifier}") {
+            execution.backend.withJobGroup(target.name, s"$phase target ${target.identifier}") {
                 logSubtitle(s"$phase target '${target.identifier}'")
                 executeTarget(execution, target, phase, dryRun)
             }

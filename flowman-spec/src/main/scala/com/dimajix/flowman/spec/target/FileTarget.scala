@@ -123,17 +123,17 @@ final case class FileTarget(
     override def dirty(execution: Execution, phase: Phase): Trilean = {
         phase match {
             case Phase.CREATE =>
-                val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+                val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
                 !fs.getFileStatus(qualifiedLocation).isDirectory
             case Phase.BUILD =>
-                val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+                val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
                 !HadoopUtils.isValidFileData(fs, qualifiedLocation)
             case Phase.VERIFY => Yes
             case Phase.TRUNCATE =>
-                val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+                val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
                 fs.listStatus(qualifiedLocation).nonEmpty
             case Phase.DESTROY =>
-                val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+                val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
                 fs.exists(qualifiedLocation)
             case _ => No
         }
@@ -142,7 +142,7 @@ final case class FileTarget(
     override def create(execution: Execution) : Unit = {
         require(execution != null)
 
-        val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+        val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
         if (!fs.getFileStatus(qualifiedLocation).isDirectory) {
             logger.info(s"Creating directory '$qualifiedLocation' for file relation '$identifier'")
             fs.mkdirs(qualifiedLocation)
@@ -202,7 +202,7 @@ final case class FileTarget(
     override def truncate(execution: Execution): Unit = {
         require(execution != null)
 
-        val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+        val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
         if (fs.getFileStatus(qualifiedLocation).isDirectory) {
             logger.info(s"Truncating directory '$qualifiedLocation' of file relation '$identifier'")
             val files = fs.listStatus(qualifiedLocation)
@@ -213,7 +213,7 @@ final case class FileTarget(
     override def destroy(execution: Execution) : Unit = {
         require(execution != null)
 
-        val fs = qualifiedLocation.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+        val fs = qualifiedLocation.getFileSystem(execution.backend.hadoopConf)
         if (fs.exists(qualifiedLocation)) {
             logger.info(s"Deleting directory '$qualifiedLocation' of file relation '$identifier'")
             fs.delete(qualifiedLocation, true)

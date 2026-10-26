@@ -91,6 +91,11 @@
         <spark.version>4.1.0</spark.version>
         <spark-api.version>4.1</spark-api.version>
         <spark-source.version>4.0</spark-source.version>
+
+        <!-- API mode ("classic" or "connect") used by the local test fixture. The "-Pspark-connect" profile
+             switches this to "connect" so that the whole test suite runs against an in-process Spark Connect
+             server. -->
+        <flowman.test.spark.api.mode>classic</flowman.test.spark.api.mode>
         <hive.version>2.3.9</hive.version>
         <hive-storage-api.version>2.8.1</hive-storage-api.version>
         <kafka.version>3.9.1</kafka.version>
@@ -1223,6 +1228,96 @@
             </properties>
         </profile>
         <profile>
+            <id>spark-connect</id>
+            <!-- Spark Connect profile. Selects the same dependency set as "spark-4.1" (which is active by default
+                 and therefore cannot be used together with "-Pspark-connect"), but runs the whole test suite in
+                 Spark Connect mode by setting the "spark.api.mode" system property to "connect". The local test
+                 fixture in flowman-spark-testing reacts to that property and spins up an in-process Connect server.
+            -->
+            <properties>
+                <flowman.test.spark.api.mode>connect</flowman.test.spark.api.mode>
+                <java.version>17</java.version>
+                <hadoop.version>3.4.2</hadoop.version>
+                <hadoop-api.version>3.4</hadoop-api.version>
+                <scala.version>2.13.17</scala.version>
+                <scala.api_version>2.13</scala.api_version>
+                <spark.version>4.1.0</spark.version>
+                <spark-api.version>4.1</spark-api.version>
+                <spark-source.version>4.0</spark-source.version>
+                <hive.version>2.3.9</hive.version>
+                <hive-storage-api.version>2.8.1</hive-storage-api.version>
+                <kafka.version>3.9.1</kafka.version>
+                <zookeeper.version>3.9.4</zookeeper.version>
+
+                <antlr4.version>4.13.1</antlr4.version>
+                <avro.version>1.12.1</avro.version>
+                <commons-cli.version>1.9.0</commons-cli.version>
+                <commons-codec.version>1.19.0</commons-codec.version>
+                <commons-collections.version>3.2.2</commons-collections.version>
+                <commons-compiler.version>3.1.9</commons-compiler.version>
+                <commons-compress.version>1.28.0</commons-compress.version>
+                <commons-io.version>2.21.0</commons-io.version>
+                <commons-lang3.version>3.19.0</commons-lang3.version>
+                <commons-math3.version>3.6.1</commons-math3.version>
+                <commons-text.version>1.14.0</commons-text.version>
+                <curator-client.version>2.13.0</curator-client.version>
+                <curator.version>5.9.0</curator.version>
+                <derby.version>10.16.1.1</derby.version>
+                <dropwizard.version>4.2.0</dropwizard.version>
+                <guava.version>33.4.8-jre</guava.version>
+                <hk2.version>2.6.1</hk2.version>
+                <httpclient.version>4.5.14</httpclient.version>
+                <httpcore.version>4.4.16</httpcore.version>
+                <ivy.version>2.5.3</ivy.version>
+                <jackson.version>2.20.0</jackson.version>
+                <jackson-api.version>2.20</jackson-api.version>
+                <jackson-annotations.version>${jackson-api.version}</jackson-annotations.version>
+                <jackson-source.version>2.18</jackson-source.version>
+                <jackson-databind.version>2.20.0</jackson-databind.version>
+                <jackson-dataformat-yaml.scope>provided</jackson-dataformat-yaml.scope>
+                <jackson-jaxb.scope>compile</jackson-jaxb.scope>
+                <jackson-jaxrs.scope>compile</jackson-jaxrs.scope>
+                <jakarta.activation-api.version>1.2.1</jakarta.activation-api.version>
+                <jakarta.activation-api.scope>compile</jakarta.activation-api.scope>
+                <jakarta.annotation-api.version>1.3.5</jakarta.annotation-api.version>
+                <jakarta.annotation-api.scope>provided</jakarta.annotation-api.scope>
+                <jakarta.inject.version>2.6.1</jakarta.inject.version>
+                <jakarta.inject.scope>provided</jakarta.inject.scope>
+                <jakarta.validation-api.version>2.0.2</jakarta.validation-api.version>
+                <jakarta.validation-api.scope>provided</jakarta.validation-api.scope>
+                <jakarta.ws.rs-api.version>2.1.6</jakarta.ws.rs-api.version>
+                <jakarta.ws.rs-api.scope>provided</jakarta.ws.rs-api.scope>
+                <jakarta.xml.bind-api.version>2.3.2</jakarta.xml.bind-api.version>
+                <jakarta.xml.bind-api.scope>provided</jakarta.xml.bind-api.scope>
+                <javassist.version>3.25.0-GA</javassist.version>
+                <jaxb-runtime.version>2.3.2</jaxb-runtime.version>
+                <jaxb-runtime.scope>provided</jaxb-runtime.scope>
+                <jersey.version>3.0.18</jersey.version>
+                <joda-time.version>2.10.10</joda-time.version>
+                <json4s.version>4.0.7</json4s.version>
+                <jsr305.version>3.0.0</jsr305.version>
+                <libthrift.version>0.16.0</libthrift.version>
+                <log4j.version>2.24.3</log4j.version>
+                <log4j.slf4j-impl>log4j-slf4j2-impl</log4j.slf4j-impl>
+                <lz4.version>1.8.0</lz4.version>
+                <netty-all.version>4.2.7.Final</netty-all.version>
+                <netty-all.exclusion>none</netty-all.exclusion>
+                <netty-extras.scope>provided</netty-extras.scope>
+                <paranamer.version>2.8</paranamer.version>
+                <scala-collection-compat.version>2.14.0</scala-collection-compat.version>
+                <scala-collection-compat.scope>provided</scala-collection-compat.scope>
+                <scala-parser-combinators.version>2.4.0</scala-parser-combinators.version>
+                <scala-xml.version>2.4.0</scala-xml.version>
+                <scalatest-api.version>3.2</scalatest-api.version>
+                <scalatest.version>3.2.19</scalatest.version>
+                <slf4j.version>2.0.17</slf4j.version>
+                <slf4j-api.version>2</slf4j-api.version>
+                <snakeyaml.version>2.5</snakeyaml.version>
+                <snakeyaml.scope>provided</snakeyaml.scope>
+                <snappy.version>1.1.10.8</snappy.version>
+            </properties>
+        </profile>
+        <profile>
             <id>spark-4.2</id>
             <properties>
                 <java.version>17</java.version>
@@ -1599,6 +1694,7 @@
                             <spark.ui.showConsoleProgress>false</spark.ui.showConsoleProgress>
                             <spark.sql.shuffle.partitions>8</spark.sql.shuffle.partitions>
                             <spark.sql.warehouse.dir>file:///tmp/spark-warehouse</spark.sql.warehouse.dir>
+                            <spark.api.mode>${flowman.test.spark.api.mode}</spark.api.mode>
                         </systemProperties>
                     </configuration>
                     <executions>
@@ -2235,9 +2331,39 @@
                         <groupId>org.apache.hadoop</groupId>
                         <artifactId>hadoop-client-api</artifactId>
                     </exclusion>
-                    <exclusion>
+                         <exclusion>
                         <groupId>org.apache.hadoop</groupId>
                         <artifactId>hadoop-client-runtime</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.spark</groupId>
+                <artifactId>spark-connect_${scala.api_version}</artifactId>
+                <version>${spark.version}</version>
+                <scope>provided</scope>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.spark-project.spark</groupId>
+                        <artifactId>unused</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.spark</groupId>
+                <artifactId>spark-connect-client-jvm_${scala.api_version}</artifactId>
+                <version>${spark.version}</version>
+                <scope>provided</scope>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.spark-project.spark</groupId>
+                        <artifactId>unused</artifactId>
+                    </exclusion>
+                    <!-- The connect client's shims module provides reduced stand-in classes (SparkContext, SparkConf,
+                         SessionState, ...) which collide with the full Spark jars that Flowman always supplies. -->
+                    <exclusion>
+                        <groupId>org.apache.spark</groupId>
+                        <artifactId>spark-connect-shims_${scala.api_version}</artifactId>
                     </exclusion>
                 </exclusions>
             </dependency>

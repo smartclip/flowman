@@ -21,7 +21,7 @@ import org.slf4j.ILoggerFactory
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-import com.dimajix.flowman.catalog.HiveCatalog
+import com.dimajix.flowman.catalog.Catalog
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.fs.FileSystem
 import com.dimajix.flowman.metric.MetricBoard
@@ -73,7 +73,7 @@ final class ScopedExecution(parent:Execution, isolated:Boolean=true) extends Cac
      * Returns the table catalog used for managing table instances
      * @return
      */
-    override def catalog: HiveCatalog = parent.catalog
+    override def catalog: Catalog = parent.catalog
 
     /**
      * Returns the [[ActivityManager]] of this execution, which should be the instance created by the [[Session]]

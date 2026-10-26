@@ -25,11 +25,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.commons.io.IOUtils
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Dataset
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.catalyst.plans.logical.UnaryNode
-import org.apache.spark.sql.catalyst.plans.logical.Union
 
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
@@ -40,7 +36,6 @@ import com.dimajix.flowman.model.BaseMapping
 import com.dimajix.flowman.model.Mapping
 import com.dimajix.flowman.model.MappingOutputIdentifier
 import com.dimajix.flowman.types.StructType
-import com.dimajix.spark.sql.DataFrameBuilder
 import com.dimajix.spark.sql.DataFrameUtils.withTempView
 import com.dimajix.spark.sql.DataFrameUtils.withTempViews
 import com.dimajix.spark.sql.SqlParser
@@ -96,19 +91,12 @@ extends BaseMapping {
     }
 
     private def firstDf(spark:SparkSession, statement:String) : DataFrame = {
-        @tailrec
-        def findUnion(plan:LogicalPlan) : LogicalPlan = {
-            plan match {
-                case union:Union => union
-                case node:UnaryNode => findUnion(node.child)
-                case _ => throw new IllegalArgumentException(s"SQL provided in recursiveSql mapping '$identifier' is not supported. Please use a structure like  'SELECT starting_point UNION ALL recursion', where starting_point does not reference __this__.")
-            }
-        }
+        val idx = SqlParser.findTopLevelUnion(statement)
+        if (idx < 0)
+            throw new IllegalArgumentException(s"SQL provided in recursiveSql mapping '$identifier' is not supported. Please use a structure like  'SELECT starting_point UNION ALL recursion', where starting_point does not reference __this__.")
 
-        val plan = SqlParser.parsePlan(statement)
-        val union = findUnion(plan)
-        val firstChild = union.children.head
-        DataFrameBuilder.ofRows(spark, firstChild)
+        val firstChildSql = statement.substring(0, idx)
+        spark.sql(firstChildSql)
     }
     private def nextDf(statement:String, prev:DataFrame) : DataFrame = {
         val spark = prev.sparkSession
@@ -131,7 +119,11 @@ extends BaseMapping {
 
         // Create dummy data frames
         val replacements = input.map { case (id,schema) =>
-            id.name -> DataFrameBuilder.singleRow(spark, schema.sparkType)
+            val sparkSchema = schema.sparkType
+            val columns = sparkSchema.fields.map { field =>
+                org.apache.spark.sql.functions.lit(null).cast(field.dataType).as(field.name)
+            }
+            id.name -> spark.range(1).select(columns:_*)
         }
 
         val result = withTempViews(replacements) {

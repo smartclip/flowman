@@ -19,10 +19,6 @@ package com.dimajix.flowman.spec.dataset
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.execution.datasources.DataSource
-import org.apache.spark.sql.execution.datasources.FileFormat
-import org.apache.spark.sql.sources.RelationProvider
-import org.apache.spark.sql.sources.SchemaRelationProvider
 import org.slf4j.LoggerFactory
 
 import com.dimajix.common.Trilean
@@ -113,17 +109,16 @@ case class FileDataset(
         // Use either load(files) or load(single_file) - this actually results in different code paths in Spark
         // load(single_file) will set the "path" option, while load(multiple_files) needs direct support from the
         // underlying format implementation
-        val providingClass = DataSource.lookupDataSource(format, execution.spark.sessionState.conf)
-        val df = providingClass.getDeclaredConstructor().newInstance() match {
-            case _: RelationProvider => reader.load(qualifiedPath.toString)
-            case _: SchemaRelationProvider => reader.load(qualifiedPath.toString)
-            case _: FileFormat => reader.load(Seq(qualifiedPath.toString):_*)
-            case _ => reader.load(qualifiedPath.toString)
-        }
+        val multiPath = execution.backend.relationSupportsMultiplePaths(format)
+        val df = if (multiPath)
+            reader.load(Seq(qualifiedPath.toString):_*)
+        else
+            reader.load(qualifiedPath.toString)
 
         // Install callback to refresh DataFrame when data is overwritten
         execution.addResource(ResourceIdentifier.ofFile(qualifiedPath)) {
-            df.queryExecution.logical.refresh()
+            if (!execution.backend.isConnect)
+                df.queryExecution.logical.refresh()
         }
 
         df

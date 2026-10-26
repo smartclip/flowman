@@ -21,7 +21,7 @@ import org.slf4j.ILoggerFactory
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
-import com.dimajix.flowman.catalog.HiveCatalog
+import com.dimajix.flowman.catalog.Catalog
 import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.fs.FileSystem
 import com.dimajix.flowman.metric.MetricBoard
@@ -82,7 +82,7 @@ final class RootExecution(val session:Session) extends CachingExecution(None, tr
      * Returns the table catalog used for managing table instances
      * @return
      */
-    override def catalog: HiveCatalog = session.catalog
+    override def catalog: Catalog = session.catalog
 
     /**
      * Returns the [[ActivityManager]] of this execution, which is the same instance created by the [[Session]]

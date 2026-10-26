@@ -24,8 +24,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.SparkShim
-import org.apache.spark.sql.execution.datasources.DataSource
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.streaming.StreamingQuery
 import org.apache.spark.sql.streaming.Trigger
@@ -161,7 +159,8 @@ case class FileRelation(
         // Install callback to refresh DataFrame when data is overwritten
         execution.addResource(resource) {
             df.sparkSession.catalog.refreshByPath(qualifiedLocation.toString)
-            df.queryExecution.logical.refresh()
+            if (!execution.backend.isConnect)
+                df.queryExecution.logical.refresh()
         }
 
         df
@@ -170,8 +169,7 @@ case class FileRelation(
         if (!collector.exists())
             throw new FileNotFoundException(s"Location '$qualifiedLocation' does match any existing directories and files")
 
-        val providingClass = DataSource.lookupDataSource(format, execution.spark.sessionState.conf)
-        val multiPath =  SparkShim.relationSupportsMultiplePaths(providingClass)
+        val multiPath = execution.backend.relationSupportsMultiplePaths(format)
 
         val data = mapFiles(partitions) { (partition, paths) =>
             logger.info(s"Reading file relation '$identifier' at '${qualifiedLocation}' with partition ${partition.spec}, this will read files ${paths.mkString(",")}")

@@ -20,6 +20,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.OutputStreamWriter
 
+import scala.jdk.CollectionConverters._
+
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.univocity.parsers.csv.CsvFormat
 import com.univocity.parsers.csv.CsvWriter
@@ -150,9 +152,18 @@ final case class LocalTarget(
             writer.writeHeaders(cols:_*)
 
         val dfCount = countRecords(execution, dfOut)
-        dfCount.rdd.toLocalIterator.foreach(row =>
-            writer.writeRow((0 until row.size).map(row.getString).toArray)
-        )
+        val iterator = dfCount.toLocalIterator
+        try {
+            iterator.asScala.foreach(row =>
+                writer.writeRow((0 until row.size).map(row.getString).toArray)
+            )
+        }
+        finally {
+            iterator match {
+                case closeable: AutoCloseable => closeable.close()
+                case _ =>
+            }
+        }
 
         writer.close()
         outputWriter.close()
