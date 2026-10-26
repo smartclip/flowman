@@ -74,7 +74,9 @@ class CoalesceMappingTest extends AnyFlatSpec with Matchers with LocalSparkSessi
         mapping.describe(executor, Map(MappingOutputIdentifier("input") -> inputSchema)) should be (Map("main" -> inputSchema))
 
         val result = mapping.execute(executor, Map(MappingOutputIdentifier("input") -> input))("main")
-        result.rdd.partitions.size should be (1)
+        // Partition counts are not directly observable from a Spark Connect client
+        if (!result.sparkSession.getClass.getName.startsWith("org.apache.spark.sql.connect"))
+            result.rdd.partitions.size should be (1)
         result.count() should be (100)
 
         session.shutdown()
