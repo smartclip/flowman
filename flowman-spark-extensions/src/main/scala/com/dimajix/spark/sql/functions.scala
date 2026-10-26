@@ -23,15 +23,29 @@ import org.apache.spark.sql.SparkShim
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.ExpressionInfo
+import org.apache.spark.sql.functions.lit
+import org.apache.spark.sql.functions.struct
+import org.apache.spark.sql.functions.when
 import org.apache.spark.util.LongAccumulator
 import com.dimajix.spark.sql.catalyst.plans.logical.CountRecords
-import com.dimajix.spark.sql.expressions.CreateNullableStruct
 
 
 class functions
 object functions {
+    /**
+      * Creates a struct with the given values which evaluates to `NULL` if and only if all values are `NULL`.
+      * This mirrors the semantics of the (classic) `named_nullable_struct` expression, but is expressed via the
+      * public Spark API, so that it can also be serialized by a Spark Connect client. Note that the classic
+      * expression used to preserve metadata of aliased child expressions in the struct field metadata, which is
+      * not possible with the public API.
+      */
     @scala.annotation.varargs
-    def nullable_struct(cols: Column*): Column = SparkShim.column(CreateNullableStruct(cols.map(SparkShim.expr)))
+    def nullable_struct(cols: Column*): Column = {
+        if (cols.isEmpty)
+            when(lit(true), lit(null)).otherwise(struct())
+        else
+            when(cols.map(_.isNull).reduce(_ && _), lit(null)).otherwise(struct(cols:_*))
+    }
 
     def count_records(df:DataFrame, counter:LongAccumulator) : DataFrame =
         DataFrameBuilder.ofRows(df.sparkSession, CountRecords(df.queryExecution.logical, counter))

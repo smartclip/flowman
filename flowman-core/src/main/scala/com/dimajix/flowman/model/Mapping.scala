@@ -528,7 +528,14 @@ abstract class BaseMapping extends AbstractInstance with Mapping with Logging {
                 val deps = ExpressionParser.resolveDependencies(filter)
                     .map(d => d -> inputs(MappingOutputIdentifier(d)))
                 DataFrameUtils.withTempViews(deps) {
-                    df.where(expr(filter))
+                    val result = df.where(expr(filter))
+                    // Spark Connect analyzes the filter expression only when the result is consumed, which happens
+                    // after the temporary views (the filter might reference other mapping outputs in subqueries)
+                    // have been dropped again. Hence materialize the result while the views still exist
+                    if (df.sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+                        result.localCheckpoint(false)
+                    else
+                        result
                 }
             case None => df
         }

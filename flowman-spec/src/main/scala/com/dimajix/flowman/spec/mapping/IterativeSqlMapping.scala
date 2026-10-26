@@ -94,7 +94,13 @@ extends BaseMapping {
     private def nextDf(statement:String, prev:DataFrame) : DataFrame = {
         val spark = prev.sparkSession
         withTempView("__this__", prev) {
-            spark.sql(statement)
+            val df = spark.sql(statement)
+            // Spark Connect analyzes queries lazily at first consumption, which happens after the temporary view
+            // has been dropped. Materialize the result while the view is still available
+            if (spark.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+                df.localCheckpoint(false)
+            else
+                df
         }
     }
 
