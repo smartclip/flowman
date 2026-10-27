@@ -115,8 +115,16 @@ private[execution] final class ConnectBackend(
     override def addJar(jar:String) : Unit = spark.addArtifact(jar)
 
     override def relationSupportsMultiplePaths(format:String) : Boolean = {
-        val normalized = format.toLowerCase(Locale.ROOT)
-        multiPathFormats.exists(normalized.contains)
+        // Spark Connect clients cannot resolve the providing class of a format on the client side. When the Flowman
+        // server plugin is installed, the capability is probed on the server. Otherwise fall back to a static set
+        // of the built-in file formats based on FileFormat/FileDataSourceV2 which do support reading multiple paths
+        // at once. Any other (custom) format is assumed to support only a single path, which also covers
+        // RelationProvider based formats and is the safe default.
+        ConnectServerPlugin.relationSupportsMultiplePaths(spark, format)
+            .getOrElse {
+                val normalized = format.toLowerCase(Locale.ROOT)
+                multiPathFormats.exists(normalized.contains)
+            }
     }
 
     override def registerStrategies(enableEagerCache:Boolean) : Unit = {

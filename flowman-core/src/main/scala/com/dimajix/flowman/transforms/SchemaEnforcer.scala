@@ -20,6 +20,7 @@ import java.util.Locale
 
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.SparkShim
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.functions.lit
@@ -39,10 +40,10 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.types.VarcharType
 
 import com.dimajix.common.MapIgnoreCase
+import com.dimajix.flowman.execution.FlowmanFunctions
 import com.dimajix.flowman.execution.SchemaMismatchException
 import com.dimajix.flowman.util.SparkSchemaUtils.coerce
 import com.dimajix.spark.sql.SchemaUtils.CHAR_VARCHAR_TYPE_STRING_METADATA_KEY
-import com.dimajix.spark.sql.functions.nullable_struct
 
 
 sealed abstract class ColumnMismatchPolicy extends Product with Serializable
@@ -150,7 +151,7 @@ final case class SchemaEnforcer(
       */
     def transform(inputSchema:StructType) : Seq[Column] = {
         if (columnMismatchPolicy != ColumnMismatchPolicy.IGNORE || typeMismatchPolicy != TypeMismatchPolicy.IGNORE || charVarcharPolicy != CharVarcharPolicy.IGNORE) {
-            conformStruct(schema, inputSchema, "")
+            conformStruct(schema, inputSchema, "")(None)
         }
         else {
             inputSchema.map(f => col(f.name))
@@ -165,11 +166,20 @@ final case class SchemaEnforcer(
       */
     def transform(df:DataFrame) : DataFrame = {
         if (columnMismatchPolicy != ColumnMismatchPolicy.IGNORE || typeMismatchPolicy != TypeMismatchPolicy.IGNORE || charVarcharPolicy != CharVarcharPolicy.IGNORE) {
-            val unifiedColumns = transform(df.schema)
+            val unifiedColumns = transformWithSpark(df.schema, Some(df.sparkSession))
             df.select(unifiedColumns: _*)
         }
         else {
             df
+        }
+    }
+
+    private def transformWithSpark(inputSchema:StructType, spark:Option[SparkSession]) : Seq[Column] = {
+        if (columnMismatchPolicy != ColumnMismatchPolicy.IGNORE || typeMismatchPolicy != TypeMismatchPolicy.IGNORE || charVarcharPolicy != CharVarcharPolicy.IGNORE) {
+            conformStruct(schema, inputSchema, "")(spark)
+        }
+        else {
+            inputSchema.map(f => col(f.name))
         }
     }
 
@@ -197,7 +207,7 @@ final case class SchemaEnforcer(
         }
     }
 
-    private def conformField(requiredField:StructField, inputField:StructField, prefix:String) : Column = {
+    private def conformField(requiredField:StructField, inputField:StructField, prefix:String)(implicit spark:Option[SparkSession]) : Column = {
         val inputType = inputField.dataType
         val field = requiredField.dataType match {
             // Simple match: DataType is already correct
@@ -205,7 +215,7 @@ final case class SchemaEnforcer(
             case st:StructType =>
                 val columns = conformStruct(st, inputType.asInstanceOf[StructType], prefix + requiredField.name + ".")
                 if (requiredField.nullable) {
-                    nullable_struct(columns: _*)
+                    FlowmanFunctions.nullableStruct(spark, columns: _*)
                 }
                 else {
                     struct(columns: _*)
@@ -229,7 +239,7 @@ final case class SchemaEnforcer(
         alias(field, requiredField.name, metadata)
     }
 
-    private def conformStruct(requiredSchema:StructType, inputSchema:StructType, prefix:String) : Seq[Column] = {
+    private def conformStruct(requiredSchema:StructType, inputSchema:StructType, prefix:String)(implicit spark:Option[SparkSession]) : Seq[Column] = {
         val allColumns = {
             if (removeColumns) {
                 // Allow to remove columns from input schema, so we simply restrict to requested columns

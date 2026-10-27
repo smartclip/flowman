@@ -74,6 +74,15 @@
             <artifactId>flowman-spark-testing</artifactId>
         </dependency>
 
+        <!-- The Flowman Spark Connect server plugin is only needed on the test classpath, so that the
+             in-process Connect server (see flowman-spark-testing) runs with the plugin installed. The
+             plugin's classes are picked up automatically via reflection. -->
+        <dependency>
+            <groupId>com.dimajix.flowman</groupId>
+            <artifactId>flowman-connect-server</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>com.github.jsqlparser</groupId>
             <artifactId>jsqlparser</artifactId>

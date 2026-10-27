@@ -70,6 +70,27 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
         builder
     }
 
+    /**
+      * Configures the server-side SparkSession of the in-process Spark Connect server. Override this hook in tests
+      * to register server-side plugins/extensions (e.g. the Flowman Spark Connect server plugin). By default the
+      * Flowman server plugin is registered automatically whenever its classes are on the (test) classpath.
+      */
+    def configureServerSpark(builder: SparkSession.Builder) : SparkSession.Builder = {
+        // Automatically register the Flowman Spark Connect server plugin (its SparkSessionExtensions plus
+        // RelationPlugin/ExpressionPlugin/CommandPlugin classes) whenever the flowman-connect-server module is on
+        // the (test) classpath. Reflection is used here so that this fixture module does not depend on it.
+        try {
+            builder
+                .config("spark.sql.extensions", Class.forName("com.dimajix.flowman.connect.server.FlowmanSparkSessionExtensions").getName)
+                .config("spark.connect.extensions.relation.classes", Class.forName("com.dimajix.flowman.connect.server.FlowmanRelationPlugin").getName)
+                .config("spark.connect.extensions.expression.classes", Class.forName("com.dimajix.flowman.connect.server.FlowmanExpressionPlugin").getName)
+                .config("spark.connect.extensions.command.classes", Class.forName("com.dimajix.flowman.connect.server.FlowmanCommandPlugin").getName)
+        }
+        catch {
+            case _: ClassNotFoundException => builder
+        }
+    }
+
     override def beforeAll() : Unit = {
         super.beforeAll()
 
@@ -178,12 +199,16 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
     ) : Unit = {
         // Create a classic session which acts as the server side session of the in-process Connect server.
         // NOTE: `configureSpark` is intentionally NOT applied here, it is an extension hook for the client session.
+        // `configureServerSpark` on the other hand is applied to the server session, so that server-side plugins
+        // and extensions (like the Flowman server plugin) can be registered.
         val serverBuilder = baseBuilder(localMetastorePath, localWarehousePath, streamingCheckpointPath)
             .config("spark.connect.grpc.binding.port", "0")
             // Bind the in-process Connect server to the IPv4 loopback address, so that the client can reach it via
             // "localhost". Without this hint Netty may bind to the IPv6 wildcard address, which is not reachable
             // when the client resolves localhost to 127.0.0.1.
             .config("spark.connect.grpc.binding.address", "127.0.0.1")
+
+        configureServerSpark(serverBuilder)
 
         val serverSpark = serverBuilder.getOrCreate()
         serverSpark.sparkContext.setLogLevel("WARN")

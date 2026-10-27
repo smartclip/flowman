@@ -55,6 +55,10 @@ BACKLOG=(
 EXCLUDE_DIRS=(
     "flowman-core/src/main/scala/com/dimajix/flowman/execution/ClassicBackend.scala"
     "flowman-core/src/main/scala/com/dimajix/flowman/execution/ConnectBackend.scala"
+    # The Spark Connect server plugin intentionally runs inside the Connect server (driver), where the classic
+    # Spark API (SparkContext/SessionState/...) is available by design.
+    "flowman-connect-server/src/main/scala/com/dimajix/flowman/connect/server/FlowmanRelationPlugin.scala"
+    "flowman-connect-server/src/main/scala/com/dimajix/flowman/connect/server/FlowmanCommandPlugin.scala"
 )
 
 # Find offending files under any module's src/main

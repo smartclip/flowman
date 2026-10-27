@@ -19,39 +19,11 @@ package com.dimajix.flowman.model
 import scala.util.control.NonFatal
 
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.catalyst.expressions.Alias
-import org.apache.spark.sql.catalyst.expressions.CaseWhen
-import org.apache.spark.sql.catalyst.expressions.Cast
-import org.apache.spark.sql.catalyst.expressions.Coalesce
-import org.apache.spark.sql.catalyst.expressions.Concat
-import org.apache.spark.sql.catalyst.expressions.DateFormatClass
 import org.apache.spark.sql.catalyst.expressions.ExprId
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.expressions.FromUTCTimestamp
-import org.apache.spark.sql.catalyst.expressions.FromUnixTime
-import org.apache.spark.sql.catalyst.expressions.If
-import org.apache.spark.sql.catalyst.expressions.IfNull
-import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.expressions.NamedExpression
-import org.apache.spark.sql.catalyst.expressions.Nvl
-import org.apache.spark.sql.catalyst.expressions.Nvl2
-import org.apache.spark.sql.catalyst.expressions.String2StringExpression
-import org.apache.spark.sql.catalyst.expressions.Substring
-import org.apache.spark.sql.catalyst.expressions.ToUTCTimestamp
-import org.apache.spark.sql.catalyst.expressions.ToUnixTimestamp
-import org.apache.spark.sql.catalyst.expressions.TruncInstant
-import org.apache.spark.sql.catalyst.expressions.UnaryExpression
-import org.apache.spark.sql.catalyst.expressions.UnixTimestamp
-import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateExpression
-import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateFunction
-import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.catalyst.plans.logical.OneRowRelation
-import org.apache.spark.sql.catalyst.plans.logical.Union
 import org.apache.spark.sql.functions.expr
-import org.apache.spark.sql.{types => st}
-import org.apache.spark.sql.types.StructField
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.unsafe.types.UTF8String
 import org.slf4j.LoggerFactory
 
 import com.dimajix.common.IdentityHashSet
@@ -60,22 +32,16 @@ import com.dimajix.flowman.documentation.MappingDoc
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.NoSuchMappingOutputException
+import com.dimajix.flowman.execution.ConnectServerPlugin
 import com.dimajix.flowman.graph.Column
 import com.dimajix.flowman.graph.Linker
 import com.dimajix.flowman.graph.MappingOutput
 import com.dimajix.flowman.graph.MappingRef
 import com.dimajix.flowman.model
-import com.dimajix.flowman.types.CharType
-import com.dimajix.flowman.types.Field
-import com.dimajix.flowman.types.FieldType
-import com.dimajix.flowman.types.SchemaUtils
 import com.dimajix.flowman.types.StructType
-import com.dimajix.flowman.types.VarcharType
 import com.dimajix.spark.sql.DataFrameBuilder
 import com.dimajix.spark.sql.DataFrameUtils
 import com.dimajix.spark.sql.ExpressionParser
-import com.dimajix.spark.sql.SchemaUtils.CHAR_VARCHAR_TYPE_STRING_METADATA_KEY
-import com.dimajix.spark.sql.SchemaUtils.hasExtendedTypeinfo
 
 
 object Mapping {
@@ -306,78 +272,6 @@ abstract class BaseMapping extends AbstractInstance with Mapping with Logging {
         require(execution != null)
         require(input != null)
 
-        def extractComment2(expressions: Seq[Expression]) : Option[String] = {
-            expressions.flatMap(extractComment).headOption
-        }
-        def extractComment(expression: Expression) : Option[String] = {
-            expression match {
-                case n:NamedExpression if n.metadata.contains("comment")=> Some(n.metadata.getString("comment"))
-                case c:Cast => extractComment(c.child)
-                case a:Alias => extractComment(a.child)
-                case c:Coalesce => extractComment2(c.children)
-                case a:AggregateExpression => extractComment(a.aggregateFunction)
-                case a:AggregateFunction => extractComment2(a.children).map(_ + s" (${a.prettyName.toUpperCase})")
-                case s:String2StringExpression => extractComment(s.asInstanceOf[UnaryExpression].child)
-                case i:If => extractComment(i.trueValue).orElse(extractComment(i.falseValue))
-                case n:IfNull => extractComment(n.left).orElse(extractComment(n.right))
-                case n:Nvl => extractComment(n.left).orElse(extractComment(n.right))
-                case n:Nvl2 => extractComment(n.expr2).orElse(extractComment(n.expr3))
-                case c:CaseWhen if c.branches.size == 1 => extractComment(c.branches.head._2)
-                case t:TruncInstant => extractComment(t.right)
-                case f:DateFormatClass => extractComment(f.left)
-                case u:UnixTimestamp => extractComment(u.left)
-                case u:FromUnixTime => extractComment(u.left)
-                case t:ToUnixTimestamp => extractComment(t.left)
-                case u:FromUTCTimestamp => extractComment(u.left)
-                case u:ToUTCTimestamp => extractComment(u.left)
-                case _ => None
-            }
-        }
-        def extractType(expression: Expression) : FieldType = {
-            expression match {
-                case n:NamedExpression if hasExtendedTypeinfo(n.metadata) => Field.of(StructField(n.name, n.dataType, n.nullable, n.metadata)).ftype
-                case a:Alias => extractType(a.child)
-                case l:Literal if l.dataType == st.StringType =>
-                    l.value match {
-                        case str:UTF8String => CharType(str.numChars())
-                        case _ => FieldType.of(l.dataType)
-                    }
-                case c:Coalesce => c.children.map(extractType).reduce(SchemaUtils.coerce)
-                case c:Concat =>
-                    c.children.map(extractType).reduce { (lt,rt) =>
-                        (lt,rt) match {
-                            case (VarcharType(l), VarcharType(r)) => VarcharType(l + r)
-                            case (CharType(l), VarcharType(r)) => VarcharType(l + r)
-                            case (VarcharType(l), CharType(r)) => VarcharType(l + r)
-                            case (CharType(l), CharType(r)) => CharType(l + r)
-                            case _ => FieldType.of(expression.dataType)
-                        }
-                    }
-                case c:Substring =>
-                    (extractType(c.str), c.pos, c.len) match {
-                        case (VarcharType(l), Literal(pos:Int, _), Literal(len:Int, _)) => VarcharType(math.max(math.min(l-pos+1, len), 1))
-                        case (CharType(l), Literal(pos:Int, _), Literal(len:Int, _)) => CharType(math.max(math.min(l-pos+1, len), 1))
-                        case _ => FieldType.of(expression.dataType)
-                    }
-                case s:String2StringExpression => extractType(s.asInstanceOf[UnaryExpression].child)
-                case _ => FieldType.of(expression.dataType)
-            }
-        }
-        def extractSchema(df:DataFrame) : StructType = {
-            val output = df.queryExecution.analyzed.output
-            val expressions = collectExpressions(df.queryExecution.analyzed)
-            val attributes = output.map(a => a.name -> expressions.getOrElse(a.exprId, a))
-                .map { case (name,expr) =>
-                    val field = Field.of(StructField(name, expr.dataType, expr.nullable, expr.metadata))
-                    field.copy(
-                        ftype = extractType(expr),
-                        description = extractComment(expr).orElse(field.description)
-                    )
-                }
-
-            StructType(attributes)
-        }
-
         // Create dummy data frames
         val replacements = input.map { case (name,schema) =>
             name -> DataFrameBuilder.singleRow(execution.spark, schema.sparkType)
@@ -386,12 +280,15 @@ abstract class BaseMapping extends AbstractInstance with Mapping with Logging {
         // Execute mapping
         val results = execute(execution, replacements)
 
-        // Extract schemas
+        // Extract schemas. In classic mode the schema is recovered from the analyzed plan (CHAR/VARCHAR lengths and
+        // column descriptions). In Connect mode this is only possible when the Flowman server plugin is installed,
+        // which performs the same recovery on the server. Without the plugin the plain (un-enriched) df.schema is
+        // used, which still round-trips CHAR/VARCHAR info stored in column metadata.
         val schemas =
             if (execution.backend.isConnect)
-                results.map { case (name,df) => name -> StructType.of(df.schema) }
+                results.map { case (name,df) => name -> ConnectServerPlugin.describe(execution, df) }
             else
-                results.map { case (name,df) => name -> extractSchema(df) }
+                results.map { case (name,df) => name -> SchemaExtractor.extractSchema(df) }
 
         // Apply documentation
         applyDocumentation(schemas)
@@ -460,7 +357,7 @@ abstract class BaseMapping extends AbstractInstance with Mapping with Logging {
         results.foreach { case(name,df) =>
             // find an appropriate  MappingOutput in the graph
             self.outputs.find(_.name == name).foreach { out =>
-                val attributes = MapIgnoreCase(resolveAttributes(df).map(a => a.name -> a))
+                val attributes = MapIgnoreCase(SchemaExtractor.resolveAttributes(df.queryExecution.analyzed).map(a => a.name -> a))
                 // For each field in the MappingOutput of the graph
                 out.fields.foreach { col =>
                     // TODO: Support nested fields
@@ -478,35 +375,12 @@ abstract class BaseMapping extends AbstractInstance with Mapping with Logging {
             }
         }
     }
-    private def resolveAttributes(df:DataFrame) : Seq[NamedExpression] = {
-        resolveAttributes(df.queryExecution.analyzed)
-    }
-    private def resolveAttributes(plan:LogicalPlan) : Seq[NamedExpression] = {
-        val expressions = collectExpressions(plan)
-        val output = plan.output
-        output.map(a => expressions.getOrElse(a.exprId, a))
-    }
-    private def collectExpressions(plan:LogicalPlan) : Map[ExprId, NamedExpression] = {
-        plan match {
-            // Special handling for UNIONs, which otherwise would only collect columns of first UNION child
-            case union:Union =>
-                val expressions = union.output
-                val childExpressions = union.children.map(resolveAttributes)
-                // The Alias(Coalesce()) expression is a workaround to collect all columns of all children into
-                // a single expression, which also needs to be a NamedExpression
-                expressions.zipWithIndex.map { case(e,i) => e.exprId -> Alias(Coalesce(childExpressions.map(_(i))),e.name)() }.toMap
-            case plan:LogicalPlan =>
-                val expressions = plan.expressions.collect { case n:NamedExpression => n.exprId -> n }.toMap
-                val childExpressions = plan.children.flatMap(collectExpressions)
-                expressions ++ childExpressions
-        }
-    }
 
     /**
-     * Applies optional documentation to the result of a [[describe]]
-     * @param schemas
-     * @return
-     */
+      * Applies optional documentation to the result of a [[describe]]
+      * @param schemas
+      * @return
+      */
     protected def applyDocumentation(schemas:Map[String,StructType]) : Map[String,StructType] = {
         val outputDoc = documentation.map(_.outputs.map(o => o.identifier.output -> o).toMap).getOrElse(Map())
         schemas.map { case (output,schema) =>

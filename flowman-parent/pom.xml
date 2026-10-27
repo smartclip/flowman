@@ -307,6 +307,18 @@
             </dependency>
             <dependency>
                 <groupId>com.dimajix.flowman</groupId>
+                <artifactId>flowman-connect-common</artifactId>
+                <version>${flowman.version}</version>
+                <scope>compile</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.dimajix.flowman</groupId>
+                <artifactId>flowman-connect-server</artifactId>
+                <version>${flowman.version}</version>
+                <scope>compile</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.dimajix.flowman</groupId>
                 <artifactId>flowman-common-java</artifactId>
                 <version>${flowman.version}</version>
                 <scope>compile</scope>

@@ -1433,10 +1433,12 @@
         <module>flowman-spark-dependencies</module>
         <module>flowman-spark-testing</module>
         <module>flowman-spark-extensions</module>
+        <module>flowman-connect-common</module>
         <module>flowman-common-java</module>
         <module>flowman-common</module>
         <module>flowman-common-jersey</module>
         <module>flowman-core</module>
+        <module>flowman-connect-server</module>
         <module>flowman-spec</module>
         <module>flowman-plugins/parent</module>
         <module>flowman-plugins/avro</module>
@@ -1962,6 +1964,16 @@
             <dependency>
                 <groupId>com.dimajix.flowman</groupId>
                 <artifactId>flowman-spark-extensions</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.dimajix.flowman</groupId>
+                <artifactId>flowman-connect-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.dimajix.flowman</groupId>
+                <artifactId>flowman-connect-server</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <artifactId>flowman-connect-common</artifactId>
+    <name>Flowman Spark Connect common protocol</name>
+    <description>Flowman Spark Connect client/server protocol messages</description>
+    <url>https://flowman.io</url>
+
+    <parent>
+        <groupId>com.dimajix.flowman</groupId>
+        <artifactId>flowman-root</artifactId>
+        <version>1.4.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <dependencies>
+        <!-- NOTE: This module intentionally has NO compile-time dependencies. The messages themselves are plain
+             data which are mapped to the Spark Connect extension payloads (google.protobuf.Any) at the usage site
+             on the client (flowman-core) and on the server (flowman-connect-server). The protobuf wire format is
+             implemented manually in FlowmanConnectMessages, because generating Java sources via protoc is not
+             possible in an offline build and the payload only uses length-delimited fields. -->
+        <dependency>
+            <groupId>org.scalatest</groupId>
+            <artifactId>scalatest_${scala.api_version}</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

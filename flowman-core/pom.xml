@@ -83,6 +83,10 @@
         </dependency>
         <dependency>
             <groupId>com.dimajix.flowman</groupId>
+            <artifactId>flowman-connect-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.dimajix.flowman</groupId>
             <artifactId>flowman-spark-testing</artifactId>
         </dependency>
         <dependency>
