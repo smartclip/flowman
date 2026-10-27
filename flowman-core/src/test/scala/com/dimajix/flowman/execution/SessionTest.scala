@@ -134,7 +134,10 @@ class SessionTest extends AnyFlatSpec with Matchers with MockFactory with LocalS
         session.spark.conf.get("spark.lala") should be ("lala_cmdline")
         session.spark.conf.get("spark.lolo") should be ("lolo_cmdline")
         session.spark.conf.get("spark.lili") should be ("lili.project")
-        session.spark.stop()
+        // A Spark Connect session is permanently invalidated by `stop()`. Since the session under
+        // test is the shared fixture session, stopping it would break all subsequent test suites.
+        if (!SparkBackend.of(session.spark).isConnect)
+            session.spark.stop()
         session.shutdown()
     }
 

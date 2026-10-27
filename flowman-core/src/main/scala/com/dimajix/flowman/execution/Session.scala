@@ -242,7 +242,17 @@ object Session {
          */
         def enableSpark() : Builder = {
             requireNoParent()
-            createSparkSession = builder => builder.getOrCreate()
+            createSparkSession = builder => {
+                // Spark Connect sessions do not recover from `stop()`, and `getOrCreate()` happily
+                // returns such an already-stopped (but still active) session, after which all RPCs
+                // fail forever. Flowman therefore never reuses a Spark Connect session, but always
+                // creates a new one owned by the Flowman Session.
+                val isConnect =
+                    SparkSession.getActiveSession.exists(_.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+                if (isConnect)
+                    SparkSession.clearActiveSession()
+                builder.getOrCreate()
+            }
             stopSparkSession = Session.stopSparkSession
             this
         }
