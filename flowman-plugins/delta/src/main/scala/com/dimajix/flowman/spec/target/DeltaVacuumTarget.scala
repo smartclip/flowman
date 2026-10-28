@@ -36,6 +36,7 @@ import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.Operation
 import com.dimajix.flowman.execution.Phase
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.graph.Linker
 import com.dimajix.flowman.model.BaseTarget
 import com.dimajix.flowman.model.Reference
@@ -45,6 +46,7 @@ import com.dimajix.flowman.model.Target
 import com.dimajix.flowman.spec.annotation.TargetType
 import com.dimajix.flowman.spec.relation.DeltaFileRelation
 import com.dimajix.flowman.spec.relation.DeltaTableRelation
+import com.dimajix.flowman.spec.relation.DeltaUtils
 import com.dimajix.flowman.spec.relation.RelationReferenceSpec
 import com.dimajix.flowman.types.SingleValue
 
@@ -99,20 +101,57 @@ case class DeltaVacuumTarget(
      *
      * @param execution
      */
-    override protected def build(execution: Execution): Unit = {
-        val deltaTable = relation.value match {
-            case table:DeltaTableRelation => DeltaTable.forName(execution.spark, table.table.toString())
-            case files:DeltaFileRelation => DeltaTable.forPath(execution.spark, files.location.toString)
+    private def isConnect(execution: Execution) : Boolean = {
+        SparkBackend.of(execution.spark).isConnect
+    }
+
+    private def sqlIdentifier : String = {
+        relation.value match {
+            case table:DeltaTableRelation => table.table.quotedString
+            case files:DeltaFileRelation => s"delta.`${files.location.toString}`"
             case rel:Relation => throw new IllegalArgumentException(s"DeltaVacuumTarget only supports relations of type deltaTable and deltaFiles, but it was given relation '${rel.identifier}' of kind '${rel.kind}'")
         }
+    }
 
-        if (compaction)
-            compact(deltaTable)
+    private def sourceDf(execution: Execution) : DataFrame = {
+        relation.value match {
+            case table:DeltaTableRelation => execution.spark.table(table.table.quotedString)
+            case files:DeltaFileRelation => execution.spark.read.format("delta").load(files.location.toString)
+            case rel:Relation => throw new IllegalArgumentException(s"DeltaVacuumTarget only supports relations of type deltaTable and deltaFiles, but it was given relation '${rel.identifier}' of kind '${rel.kind}'")
+        }
+    }
+
+    override protected def build(execution: Execution): Unit = {
+        val connect = isConnect(execution)
+        val deltaTable = if (connect)
+            None
+        else {
+            Some(relation.value match {
+                case table:DeltaTableRelation => DeltaTable.forName(execution.spark, table.table.toString())
+                case files:DeltaFileRelation => DeltaTable.forPath(execution.spark, files.location.toString)
+                case rel:Relation => throw new IllegalArgumentException(s"DeltaVacuumTarget only supports relations of type deltaTable and deltaFiles, but it was given relation '${rel.identifier}' of kind '${rel.kind}'")
+            })
+        }
+
+        if (compaction) {
+            deltaTable match {
+                case Some(dt) => compact(dt)
+                case None => compactConnect(execution)
+            }
+        }
 
         logger.info(s"Vacuum Delta relation '${relation.identifier}'")
         retentionTime match {
-            case Some(duration) => deltaTable.vacuum(duration.toHours)
-            case None => deltaTable.vacuum()
+            case Some(duration) =>
+                deltaTable match {
+                    case Some(dt) => dt.vacuum(duration.toHours)
+                    case None => execution.spark.sql(s"VACUUM $sqlIdentifier RETAIN ${duration.toHours} HOURS").collect()
+                }
+            case None =>
+                deltaTable match {
+                    case Some(dt) => dt.vacuum()
+                    case None => execution.spark.sql(s"VACUUM $sqlIdentifier").collect()
+                }
         }
     }
 
@@ -140,6 +179,59 @@ case class DeltaVacuumTarget(
         }
         else {
             compactUnpartitioned(deltaTable, deltaLog)
+        }
+    }
+
+    /**
+      * Compacts a Delta table in Connect mode. DeltaLog (which is used in classic mode to count files and to group
+      * them by partition) is not reachable from a Connect client, so the file counts and partition columns come from
+      * the `DESCRIBE DETAIL` SQL command that runs on the server, and the per-partition file grouping is approximated
+      * by grouping rows.
+      */
+    private def compactConnect(execution: Execution) : Unit = {
+        val row = execution.spark.sql(s"DESCRIBE DETAIL $sqlIdentifier").head()
+        val partitionColumns = row.getSeq[String](row.schema.fieldIndex("partitionColumns")).toSeq
+        if (partitionColumns.nonEmpty) {
+            val compactionPartitionList = sourceDf(execution)
+                .groupBy(partitionColumns.map(c => col(c)): _*)
+                .agg(
+                    functions.count("*").as("count"),
+                    functions.max("modificationTime").as("modificationTime")
+                )
+                .where(col("count") > maxFiles)
+                .select(partitionColumns.map(col): _*)
+                .sort(partitionColumns.map(col): _*)
+                .collect
+
+            ThreadUtils.parmap(compactionPartitionList, "delta-vacuum-", 8) { partition =>
+                val partitionFilterSql = partition.toSeq.zip(partitionColumns)
+                    .map { case (v, k) => s"${DeltaUtils.quoteIdentifier(k)} = ${fieldValue(v)}" }
+                    .mkString(" AND ")
+                val partitionString = partition.toSeq.zip(partitionColumns).map(kv => kv._2 + "=" + kv._1.toString).mkString(",")
+                logger.info(s"Compacting Delta relation '${relation.identifier}' for partition ${partitionString}")
+                val df = sourceDf(execution)
+                    .where(partitionFilterSql)
+                    .repartition(minFiles)
+                writeTable(df, Some(partitionFilterSql))
+            }
+        }
+        else {
+            val fileCount = row.getAs[Long]("numFiles")
+            if (fileCount > maxFiles) {
+                logger.info(s"Compacting Delta relation '${relation.identifier}'")
+                val df = sourceDf(execution).repartition(minFiles)
+                writeTable(df, None)
+            }
+        }
+    }
+
+    private def fieldValue(value:Any) : String = {
+        value match {
+            case null => "null"
+            case s:String => "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+            case _:java.sql.Timestamp | _:java.sql.Date => "'" + value.toString + "'"
+            case _:Number => value.toString
+            case _ => "'" + value.toString + "'"
         }
     }
 

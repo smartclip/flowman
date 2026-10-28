@@ -32,8 +32,6 @@ BACKLOG=(
     "flowman-core/src/main/scala/com/dimajix/flowman/documentation/SchemaCheck.scala"
     "flowman-core/src/main/scala/com/dimajix/flowman/jdbc/JdbcUtils.scala"
     "flowman-core/src/main/scala/com/dimajix/flowman/model/Mapping.scala"
-    "flowman-plugins/delta/src/main/scala/com/dimajix/flowman/spec/relation/DeltaFileRelation.scala"
-    "flowman-plugins/delta/src/main/scala/com/dimajix/flowman/spec/relation/DeltaUtils.scala"
     "flowman-spec/src/main/scala/com/dimajix/flowman/spec/dataset/FileDataset.scala"
     "flowman-spec/src/main/scala/com/dimajix/flowman/spec/mapping/GroupedAggregateMapping.scala"
     "flowman-spec/src/main/scala/com/dimajix/flowman/spec/relation/FileRelation.scala"

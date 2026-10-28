@@ -21,7 +21,6 @@ import io.delta.tables.DeltaTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType
 import org.apache.spark.sql.delta.catalog.DeltaTableV2
 import org.apache.spark.sql.streaming.StreamingQuery
 import org.apache.spark.sql.streaming.Trigger
@@ -44,16 +43,18 @@ import com.dimajix.flowman.execution.MigrationPolicy
 import com.dimajix.flowman.execution.MigrationStrategy
 import com.dimajix.flowman.execution.Operation
 import com.dimajix.flowman.execution.OutputMode
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.execution.UnspecifiedSchemaException
+import com.dimajix.flowman.jdbc.HiveDialect
 import com.dimajix.flowman.model.PartitionField
 import com.dimajix.flowman.model.PartitionSchema
 import com.dimajix.flowman.model.Relation
 import com.dimajix.flowman.model.ResourceIdentifier
 import com.dimajix.flowman.model.Schema
-import com.dimajix.flowman.spark.sql.delta.DeltaShim
 import com.dimajix.flowman.spec.annotation.RelationType
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
+import com.dimajix.spark.sql.DataFrameUtils
 
 
 final case class DeltaTableRelation(
@@ -142,7 +143,7 @@ final case class DeltaTableRelation(
 
         val extDf = applyOutputSchema(execution, addPartition(df, partition))
         mode match {
-            case OutputMode.UPDATE => doUpdate(extDf, partitionSpec)
+            case OutputMode.UPDATE => doUpdate(execution, extDf, partitionSpec)
             case _ => doWrite(extDf, partitionSpec, mode)
         }
 
@@ -164,11 +165,34 @@ final case class DeltaTableRelation(
             .mode(mode.batchMode)
             .insertInto(table.quotedString)
     }
-    private def doUpdate(df: DataFrame, partitionSpec: PartitionSpec) : Unit = {
+    private def doUpdate(execution: Execution, df: DataFrame, partitionSpec: PartitionSpec) : Unit = {
         val withinPartitionKeyColumns = if (mergeKey.nonEmpty) mergeKey else schema.map(_.primaryKey).getOrElse(Seq())
         val keyColumns = SetIgnoreCase(partitions.map(_.name)) -- partitionSpec.keys ++ withinPartitionKeyColumns
-        val table = DeltaTable.forName(df.sparkSession, this.table.quotedString)
-        DeltaUtils.upsert(table, df, keyColumns, partitionSpec)
+        if (SparkBackend.of(execution.spark).isConnect) {
+            if (keyColumns.isEmpty)
+                throw new IllegalArgumentException(s"Cannot perform upsert activity without primary key")
+            val sourceView = "_flowman_delta_upsert_source"
+            DataFrameUtils.withTempView(sourceView, df) {
+                val condition = (
+                    keyColumns.map(k => s"target.${DeltaUtils.quoteIdentifier(k)} IS NOT DISTINCT FROM source.${DeltaUtils.quoteIdentifier(k)}") ++
+                    partitionSpec.values.map { case (k, v) => s"target.${DeltaUtils.quoteIdentifier(k)} = ${HiveDialect.literal(v)}" }
+                ).mkString(" AND ")
+                DeltaUtils.runMerge(
+                    df.sparkSession,
+                    sqlIdentifier,
+                    sourceView,
+                    condition,
+                    Seq(
+                        " WHEN MATCHED THEN UPDATE SET *",
+                        " WHEN NOT MATCHED THEN INSERT *"
+                    )
+                )
+            }
+        }
+        else {
+            val table = DeltaTable.forName(df.sparkSession, this.table.quotedString)
+            DeltaUtils.upsert(table, df, keyColumns, partitionSpec)
+        }
     }
 
     /**
@@ -180,7 +204,7 @@ final case class DeltaTableRelation(
      */
     override def readStream(execution: Execution): DataFrame = {
         logger.info(s"Streaming from Delta table relation '$identifier' at $table")
-        val location = DeltaUtils.getLocation(execution, table.toSpark)
+        val location = DeltaUtils.getLocation(execution, table)
         readStreamFrom(execution, location)
     }
 
@@ -193,7 +217,7 @@ final case class DeltaTableRelation(
      */
     override def writeStream(execution: Execution, df: DataFrame, mode: OutputMode, trigger: Trigger, checkpointLocation: Path): StreamingQuery = {
         logger.info(s"Streaming to Delta table relation '$identifier' $table")
-        val location = DeltaUtils.getLocation(execution, table.toSpark)
+        val location = DeltaUtils.getLocation(execution, table)
         writeStreamTo(execution, df, location, mode, trigger, checkpointLocation)
     }
 
@@ -223,17 +247,16 @@ final case class DeltaTableRelation(
             fullSchema match {
                 case Some(targetSchema) =>
                     val table = catalog.getTable(this.table)
-                    if (table.tableType == CatalogTableType.VIEW) {
+                    if (table.tableType == TableType.VIEW) {
                         false
                     }
                     else  {
-                        val table = deltaCatalogTable(execution)
-                        val sourceSchema = com.dimajix.flowman.types.StructType.of(table.schema())
+                        val sourceSchema = com.dimajix.flowman.types.StructType.of(deltaSchema(execution))
                         val sourceTable = TableDefinition(
                             this.table,
                             TableType.TABLE,
                             columns = sourceSchema.fields,
-                            partitionColumnNames = DeltaShim.snapshot(table).metadata.partitionColumns
+                            partitionColumnNames = deltaPartitionColumns(execution)
                         )
                         val targetTable = TableDefinition(
                             this.table,
@@ -273,7 +296,7 @@ final case class DeltaTableRelation(
         }
         else if (partitions.nonEmpty) {
             val partitionSpec = PartitionSchema(partitions).spec(partition)
-            DeltaUtils.isLoaded(execution, table.toSpark, partitionSpec)
+            DeltaUtils.isLoaded(execution, table, partitionSpec)
         }
         else {
             val location = catalog.getTableLocation(table)
@@ -300,7 +323,7 @@ final case class DeltaTableRelation(
 
         DeltaUtils.createTable(
             execution,
-            Some(table.toSpark),
+            Some(table),
             location,
             sparkSchema,
             partitions,
@@ -321,17 +344,31 @@ final case class DeltaTableRelation(
         requireValidPartitionKeys(partitions)
 
         if (partitions.nonEmpty) {
-            val deltaTable = DeltaTable.forName(execution.spark, table.quotedString)
-            PartitionSchema(this.partitions).interpolate(partitions).foreach { p =>
-                deltaTable.delete(p.predicate)
+            if (SparkBackend.of(execution.spark).isConnect) {
+                PartitionSchema(this.partitions).interpolate(partitions).foreach { p =>
+                    execution.spark.sql(s"DELETE FROM $sqlIdentifier WHERE ${p.predicate}")
+                }
+                execution.spark.sql(s"VACUUM $sqlIdentifier")
             }
-            deltaTable.vacuum()
+            else {
+                val deltaTable = DeltaTable.forName(execution.spark, table.quotedString)
+                PartitionSchema(this.partitions).interpolate(partitions).foreach { p =>
+                    deltaTable.delete(p.predicate)
+                }
+                deltaTable.vacuum()
+            }
         }
         else {
             logger.info(s"Truncating Delta table relation '$identifier' by truncating table $table")
-            val deltaTable = DeltaTable.forName(execution.spark, table.quotedString)
-            deltaTable.delete()
-            deltaTable.vacuum()
+            if (SparkBackend.of(execution.spark).isConnect) {
+                execution.spark.sql(s"DELETE FROM $sqlIdentifier")
+                execution.spark.sql(s"VACUUM $sqlIdentifier")
+            }
+            else {
+                val deltaTable = DeltaTable.forName(execution.spark, table.quotedString)
+                deltaTable.delete()
+                deltaTable.vacuum()
+            }
         }
     }
 
@@ -361,7 +398,7 @@ final case class DeltaTableRelation(
         val catalog = execution.catalog
         if (catalog.tableExists(table)) {
             val table = catalog.getTable(this.table)
-            if (table.tableType == CatalogTableType.VIEW) {
+            if (table.tableType == TableType.VIEW) {
                 migrationStrategy match {
                     case MigrationStrategy.NEVER =>
                         logger.warn(s"Migration required for HiveTable relation '$identifier' from VIEW to a TABLE $this.table, but migrations are disabled.")
@@ -384,16 +421,24 @@ final case class DeltaTableRelation(
         DeltaTable.forName(execution.spark, table.quotedString)
     }
 
-    override protected def deltaCatalogTable(execution: Execution): DeltaTableV2 = {
-        val catalog = execution.catalog
-        val catalogTable = catalog.getTable(table)
+    override protected def deltaSchema(execution: Execution) : StructType = {
+        if (SparkBackend.of(execution.spark).isConnect)
+            execution.spark.table(table.quotedString).schema
+        else
+            deltaCatalogTable(execution).schema()
+    }
 
+    override protected def deltaCatalogTable(execution: Execution): DeltaTableV2 = {
+        val location = execution.catalog.getTableLocation(table)
         DeltaTableV2(
             execution.spark,
-            new Path(catalogTable.location),
-            catalogTable = Some(catalogTable),
+            location,
             tableIdentifier = Some(table.unquotedString)
         )
+    }
+
+    override protected def sqlIdentifier : String = {
+        table.quotedString
     }
 }
 

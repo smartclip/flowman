@@ -22,11 +22,11 @@ import java.util.UUID
 
 import io.delta.sql.DeltaSparkSessionExtension
 import org.apache.hadoop.fs.Path
+import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
-import org.apache.spark.sql.catalyst.catalog.CatalogTableType
 import org.apache.spark.sql.functions.expr
 import org.apache.spark.sql.streaming.Trigger
 import org.apache.spark.sql.types.DoubleType
@@ -41,6 +41,7 @@ import com.dimajix.common.No
 import com.dimajix.common.Trilean
 import com.dimajix.common.Yes
 import com.dimajix.flowman.catalog.TableIdentifier
+import com.dimajix.flowman.catalog.TableType
 import com.dimajix.flowman.execution.DeleteClause
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.InsertClause
@@ -66,6 +67,12 @@ import com.dimajix.spark.testing.QueryTest
 
 
 class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSession with QueryTest {
+    private def parallelize(rows: Seq[Row]) : Seq[Row] = rows
+
+    private def createDataFrame(rows: Seq[Row], schema: StructType) : DataFrame = {
+        com.dimajix.spark.sql.DataFrameBuilder.ofRows(spark, rows, schema)
+    }
+
     implicit class DeltaTableRelationExt(rel: DeltaTableRelation) {
         def conforms(execution: Execution, policy: MigrationPolicy): Trilean = {
             rel.copy(migrationPolicy = policy).conforms(execution)
@@ -79,6 +86,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
     override def configureSpark(builder: SparkSession.Builder): SparkSession.Builder = {
         builder.config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
             .withExtensions(new DeltaSparkSessionExtension)
+    }
+
+    override def configureServerSpark(builder: SparkSession.Builder): SparkSession.Builder = {
+        builder
+            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
     }
 
     "The DeltaTableRelation" should "be parseable" in {
@@ -165,12 +178,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
 
         // Inspect Hive table
         val table_1 = session.catalog.getTable(TableIdentifier("delta_table", Some("default")))
-        table_1.identifier should be (TableIdentifier("delta_table", Some("default")).toSpark)
-        table_1.tableType should be (CatalogTableType.MANAGED)
-        table_1.schema should be (StructType(Seq()))
-        table_1.dataSchema should be (StructType(Seq()))
+        table_1.identifier should be (TableIdentifier("delta_table", Some("default")))
+        table_1.tableType should be (TableType.TABLE)
+        table_1.schema should be (ftypes.StructType(Seq()))
+        table_1.dataSchema should be (ftypes.StructType(Seq()))
         table_1.partitionColumnNames should be (Seq())
-        table_1.partitionSchema should be (StructType(Seq()))
+        table_1.partitionSchema should be (ftypes.StructType(Seq()))
 
         // == Write ==================================================================================================
         val schema = StructType(Seq(
@@ -178,10 +191,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("char_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("v1", "str", 21)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map())
         relation.loaded(execution, Map()) should be (Yes)
 
@@ -282,12 +295,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
 
         // Inspect Hive table
         val table_1 = session.catalog.getTable(TableIdentifier("delta_table2", Some("default")))
-        table_1.identifier should be (TableIdentifier("delta_table2", Some("default")).toSpark)
-        table_1.tableType should be (CatalogTableType.EXTERNAL)
-        table_1.schema should be (StructType(Seq()))
-        table_1.dataSchema should be (StructType(Seq()))
+        table_1.identifier should be (TableIdentifier("delta_table2", Some("default")))
+        table_1.tableType should be (TableType.TABLE)
+        table_1.schema should be (ftypes.StructType(Seq()))
+        table_1.dataSchema should be (ftypes.StructType(Seq()))
         table_1.partitionColumnNames should be (Seq())
-        table_1.partitionSchema should be (StructType(Seq()))
+        table_1.partitionSchema should be (ftypes.StructType(Seq()))
 
         // == Read ==================================================================================================
         relation.read(execution, Map()).schema should be (StructType(Seq(
@@ -305,10 +318,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("char_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("v1", "str", 21)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map("part" -> SingleValue("p0")))
         relation.loaded(execution, Map()) should be (Yes)
         relation.loaded(execution, Map("part" -> SingleValue("p0"))) should be (Yes)
@@ -423,13 +436,13 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         relation.loaded(execution) should be (No)
 
         // == Write ==================================================================================================
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row(null, null, "1"),
             Row(234, 123.0, "1"),
             Row(2345, 1234.0, "1"),
             Row(23456, 12345.0, "2")
         ))
-        val df = spark.createDataFrame(rdd, StructType(relation.fields.map(_.catalogField)))
+        val df = createDataFrame(rdd, StructType(relation.fields.map(_.catalogField)))
         relation.write(execution, df, Map(), OutputMode.APPEND)
 
         // == Read ==================================================================================================
@@ -456,13 +469,13 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         relation.read(execution, Map("part" -> SingleValue("3"))).count() should be (0)
 
         // == Overwrite ==============================================================================================
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row(null, null, "1"),
             Row(234, 123.0, "1"),
             Row(2345, 1234.0, "1"),
             Row(23456, 12345.0, "3")
         ))
-        val df2 = spark.createDataFrame(rdd2, StructType(relation.fields.map(_.catalogField)))
+        val df2 = createDataFrame(rdd2, StructType(relation.fields.map(_.catalogField)))
         relation.write(execution, df2, Map(), OutputMode.OVERWRITE_DYNAMIC)
 
         // == Read ==================================================================================================
@@ -566,10 +579,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("char_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("v1", "str", 21)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map("part" -> SingleValue("p0")))
         relation.loaded(execution, Map()) should be (Yes)
         relation.loaded(execution, Map("part" -> SingleValue("p0"))) should be (Yes)
@@ -632,10 +645,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("char_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("v1", "str", 21)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map())
 
         // == Read ===================================================================================================
@@ -693,10 +706,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("char_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("v1", "str", 21)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map("part" -> SingleValue("p0")))
 
         // == Read ===================================================================================================
@@ -720,11 +733,11 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("int_col", IntegerType),
             StructField("part", StringType)
         ))
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row("v2", 22, "p0"),
             Row("v2", 23, "p1"),
         ))
-        val df2 = spark.createDataFrame(rdd2, schema2)
+        val df2 = createDataFrame(rdd2, schema2)
         relation.write(execution, df2, Map(), OutputMode.APPEND)
 
         // == Read ===================================================================================================
@@ -829,10 +842,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("char_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("v1", "str", 21)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation0.write(execution, df, Map("part" -> SingleValue("p0")))
 
         // == Check =================================================================================================
@@ -949,12 +962,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("str_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("id-1", "v1", 1),
             Row("id-1", "v2", 1),
             Row("id-2", "v3", 1)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map())
 
         // == Read ===================================================================================================
@@ -969,11 +982,11 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )
 
         // == Update =================================================================================================
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row("id-1", "v11", 2),
             Row("id-3", "v21", 2)
         ))
-        val df2 = spark.createDataFrame(rdd2, schema)
+        val df2 = createDataFrame(rdd2, schema)
         relation.write(execution, df2, Map(), OutputMode.UPDATE)
 
         // == Read ===================================================================================================
@@ -1035,12 +1048,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("str_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("id-1", "v1", 1),
             Row("id-1", "v2", 1),
             Row("id-2", "v3", 1)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map("part" -> SingleValue("p0")))
 
         // == Read ===================================================================================================
@@ -1070,11 +1083,11 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )
 
         // == Update =================================================================================================
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row("id-1", "v11", 2),
             Row("id-3", "v21", 2)
         ))
-        val df2 = spark.createDataFrame(rdd2, schema)
+        val df2 = createDataFrame(rdd2, schema)
         relation.write(execution, df2, Map("part" -> SingleValue("p0")), OutputMode.UPDATE)
 
         // == Read ===================================================================================================
@@ -1106,11 +1119,11 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )
 
         // == Update =================================================================================================
-        val rdd3 = spark.sparkContext.parallelize(Seq(
+        val rdd3 = parallelize(Seq(
             Row("id-1", "v12", 3),
             Row("id-3", "v22", 3)
         ))
-        val df3 = spark.createDataFrame(rdd3, schema)
+        val df3 = createDataFrame(rdd3, schema)
         relation.write(execution, df3, Map("part" -> SingleValue("p1")), OutputMode.UPDATE)
 
         // == Read ===================================================================================================
@@ -1153,11 +1166,11 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("int_col", IntegerType),
             StructField("part", StringType)
         ))
-        val rdd4 = spark.sparkContext.parallelize(Seq(
+        val rdd4 = parallelize(Seq(
             Row("id-5", "v55", 4, "p3"),
             Row("id-1", "v13", 4, "p0")
         ))
-        val df4 = spark.createDataFrame(rdd4, schema4)
+        val df4 = createDataFrame(rdd4, schema4)
         relation.write(execution, df4, Map(), OutputMode.UPDATE)
 
         // == Read ===================================================================================================
@@ -1216,12 +1229,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("str_col", StringType),
             StructField("int_col", IntegerType)
         ))
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row("id-1", "v1", 1),
             Row("id-1", "v2", 1),
             Row("id-2", "v3", 1)
         ))
-        val df = spark.createDataFrame(rdd, schema)
+        val df = createDataFrame(rdd, schema)
         relation.write(execution, df, Map())
 
         // == Update =================================================================================================
@@ -1231,12 +1244,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
             StructField("int_col", IntegerType),
             StructField("op", StringType)
         ))
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row("id-1", "v11", 2, "UPDATE"),
             Row("id-3", "v21", 2, "INSERT"),
             Row("id-2", null, 0, "DELETE")
         ))
-        val df2 = spark.createDataFrame(rdd2, schema2)
+        val df2 = createDataFrame(rdd2, schema2)
         relation.merge(execution, df2, None, Seq(
             UpdateClause(
                 Some(expr("source.op == 'UPDATE'"))
@@ -1299,12 +1312,12 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
 
         // Inspect Hive table
         val table_1 = session.catalog.getTable(TableIdentifier("delta_table", Some("default")))
-        table_1.identifier should be(TableIdentifier("delta_table", Some("default")).toSpark)
-        table_1.tableType should be(CatalogTableType.MANAGED)
-        table_1.schema should be(StructType(Seq()))
-        table_1.dataSchema should be(StructType(Seq()))
+        table_1.identifier should be(TableIdentifier("delta_table", Some("default")))
+        table_1.tableType should be(TableType.TABLE)
+        table_1.schema should be(ftypes.StructType(Seq()))
+        table_1.dataSchema should be(ftypes.StructType(Seq()))
         table_1.partitionColumnNames should be(Seq())
-        table_1.partitionSchema should be(StructType(Seq()))
+        table_1.partitionSchema should be(ftypes.StructType(Seq()))
 
         // == Migrate ================================================================================================
         relation.exists(execution) should be(Yes)
@@ -1375,18 +1388,18 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
 
         // Inspect Hive table
         val table_1 = session.catalog.getTable(TableIdentifier("delta_table", Some("default")))
-        table_1.identifier should be (TableIdentifier("delta_table", Some("default")).toSpark)
-        table_1.tableType should be (CatalogTableType.MANAGED)
-        table_1.schema should be (StructType(Seq()))
-        table_1.dataSchema should be (StructType(Seq()))
+        table_1.identifier should be (TableIdentifier("delta_table", Some("default")))
+        table_1.tableType should be (TableType.TABLE)
+        table_1.schema should be (ftypes.StructType(Seq()))
+        table_1.dataSchema should be (ftypes.StructType(Seq()))
         table_1.partitionColumnNames should be (Seq())
-        table_1.partitionSchema should be (StructType(Seq()))
+        table_1.partitionSchema should be (ftypes.StructType(Seq()))
 
         // == Write ==================================================================================================
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row(21, "v1")
         ))
-        val df = spark.createDataFrame(rdd, table_1.dataSchema)
+        val df = createDataFrame(rdd, table_1.dataSchema.catalogType)
         rel_1.write(execution, df)
 
         // == Read ===================================================================================================
@@ -1431,10 +1444,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )))
 
         // == Write ==================================================================================================
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row(22, "v2", 123.8)
         ))
-        val df2 = spark.createDataFrame(rdd2, df_2s.schema)
+        val df2 = createDataFrame(rdd2, df_2s.schema)
         rel_2.write(execution, df2)
 
         // == Destroy ================================================================================================
@@ -1487,10 +1500,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )))
 
         // == Write ==================================================================================================
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row(21, "v1")
         ))
-        val df = spark.createDataFrame(rdd, rel_1.schema.get.sparkSchema)
+        val df = createDataFrame(rdd, rel_1.schema.get.sparkSchema)
         rel_1.write(execution, df)
 
         // == Read ===================================================================================================
@@ -1580,10 +1593,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )))
 
         // == Write ==================================================================================================
-        val rdd1 = spark.sparkContext.parallelize(Seq(
+        val rdd1 = parallelize(Seq(
             Row(21, "v1")
         ))
-        val df1 = spark.createDataFrame(rdd1, rel_1.schema.get.sparkSchema)
+        val df1 = createDataFrame(rdd1, rel_1.schema.get.sparkSchema)
         rel_1.write(execution, df1)
 
         // == Read ===================================================================================================
@@ -1614,10 +1627,10 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         )))
 
         // == Write ==================================================================================================
-        val rdd2 = spark.sparkContext.parallelize(Seq(
+        val rdd2 = parallelize(Seq(
             Row(21, 12.37)
         ))
-        val df2 = spark.createDataFrame(rdd2, rel_2.schema.get.sparkSchema)
+        val df2 = createDataFrame(rdd2, rel_2.schema.get.sparkSchema)
         rel_2.write(execution, df2)
 
         // == Read ===================================================================================================
@@ -1640,6 +1653,7 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
     }
 
     it should "support stream writing" in {
+        if (isSparkConnectEnabled) cancel()
         val session = Session.builder()
             .withSparkSession(spark)
             .build()
@@ -1667,13 +1681,13 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         relation.loaded(execution) should be (No)
 
         // == Write ==================================================================================================
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row(null, null, null),
             Row(234, 123.0, ""),
             Row(2345, 1234.0, "1234567"),
             Row(23456, 12345.0, "1234567")
         ))
-        val df0 = spark.createDataFrame(rdd, relation.schema.get.catalogSchema)
+        val df0 = createDataFrame(rdd, relation.schema.get.catalogSchema)
         val df1 = StreamingUtils.createSingleTriggerStreamingDF(df0)
 
         val checkpoint = Paths.get(tempDir.toString, "streaming_checkpoint_" + UUID.randomUUID().toString).toUri
@@ -1702,6 +1716,7 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
     }
 
     it should "support stream writing with partitions" in {
+        if (isSparkConnectEnabled) cancel()
         val session = Session.builder()
             .withSparkSession(spark)
             .build()
@@ -1731,13 +1746,13 @@ class DeltaTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSe
         relation.loaded(execution) should be (No)
 
         // == Write ==================================================================================================
-        val rdd = spark.sparkContext.parallelize(Seq(
+        val rdd = parallelize(Seq(
             Row(null, null, "1"),
             Row(234, 123.0, "1"),
             Row(2345, 1234.0, "1"),
             Row(23456, 12345.0, "2")
         ))
-        val df0 = spark.createDataFrame(rdd, StructType(relation.fields.map(_.catalogField)))
+        val df0 = createDataFrame(rdd, StructType(relation.fields.map(_.catalogField)))
         val df1 = StreamingUtils.createSingleTriggerStreamingDF(df0)
 
         val checkpoint = Paths.get(tempDir.toString, "streaming_checkpoint_" + UUID.randomUUID().toString).toUri

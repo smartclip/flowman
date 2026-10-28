@@ -56,6 +56,12 @@ class DeltaVacuumTargetTest extends AnyFlatSpec with Matchers with LocalSparkSes
             .withExtensions(new DeltaSparkSessionExtension)
     }
 
+    override def configureServerSpark(builder: SparkSession.Builder): SparkSession.Builder = {
+        builder
+            .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+            .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+    }
+
     "A DeltaVacuumTarget" should "be parseable" in {
         val spec =
             """

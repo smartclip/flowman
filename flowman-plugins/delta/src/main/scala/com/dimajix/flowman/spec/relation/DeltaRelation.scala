@@ -42,7 +42,11 @@ import com.dimajix.flowman.catalog.TableChange.UpdateColumnType
 import com.dimajix.flowman.catalog.TableDefinition
 import com.dimajix.flowman.catalog.TableIdentifier
 import com.dimajix.flowman.execution.Execution
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.execution.MergeClause
+import com.dimajix.flowman.execution.InsertClause
+import com.dimajix.flowman.execution.UpdateClause
+import com.dimajix.flowman.execution.DeleteClause
 import com.dimajix.flowman.execution.MigrationFailedException
 import com.dimajix.flowman.execution.MigrationStrategy
 import com.dimajix.flowman.execution.OutputMode
@@ -55,13 +59,42 @@ import com.dimajix.flowman.model.SchemaRelation
 import com.dimajix.flowman.spark.sql.delta.AlterTableChangeColumnDeltaCommand
 import com.dimajix.flowman.spark.sql.delta.DeltaShim
 import com.dimajix.flowman.spark.sql.delta.QualifiedColumn
+import com.dimajix.spark.sql.DataFrameUtils
 
 
 abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String]) extends BaseRelation with PartitionedRelation with SchemaRelation with MigratableRelation {
     protected val resource : ResourceIdentifier
 
+    /**
+      * Returns the Delta table via the public io.delta.tables API. This is only usable in classic mode; in Connect
+      * mode io.delta.tables reaches into the driver session state and the relation must run server-side SQL instead.
+      */
     protected def deltaCatalogTable(execution: Execution) : DeltaTableV2
     protected def deltaTable(execution: Execution) : DeltaTable
+
+    /**
+      * Returns the current schema of the Delta table.
+      */
+    protected def deltaSchema(execution: Execution) : StructType
+
+    /**
+      * Returns the Delta table as a SQL identifier, either a (qualified) catalog table name or - for by-path tables -
+      * a `delta.`<path>`` reference. This identifier is used to run ALTER/MERGE/DELETE statements against the Delta
+      * table, which is how all DDL and DML is executed in Connect mode.
+      */
+    protected def sqlIdentifier : String
+
+    /**
+      * Returns the partition columns of the Delta table. In classic mode these are taken from the Delta log snapshot,
+      * in Connect mode - where DeltaLog is not reachable - from the `DESCRIBE DETAIL` SQL command which runs on the
+      * server.
+      */
+    protected def deltaPartitionColumns(execution: Execution) : Seq[String] = {
+        if (SparkBackend.of(execution.spark).isConnect)
+            execution.spark.sql(s"DESCRIBE DETAIL $sqlIdentifier").select("partitionColumns").head().getSeq[String](0)
+        else
+            DeltaShim.snapshot(deltaCatalogTable(execution)).metadata.partitionColumns
+    }
 
     protected def replaceWhere(df: DataFrame, partitionSpec: PartitionSpec, mode: OutputMode) : String = {
         if (partitionSpec.nonEmpty) {
@@ -90,21 +123,74 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
      * @param clauses
      */
     override def merge(execution: Execution, df: DataFrame, condition:Option[Column], clauses: Seq[MergeClause]): Unit = {
-        val mergeCondition = condition.getOrElse {
-            val withinPartitionKeyColumns =
-                if (mergeKey.nonEmpty)
-                    mergeKey
-                else if (schema.exists(_.primaryKey.nonEmpty))
-                    schema.map(_.primaryKey).get
-                else
-                    throw new IllegalArgumentException(s"Merging Delta relation '$identifier' requires primary key in schema, explicit merge key or merge condition")
-            (SetIgnoreCase(partitions.map(_.name)) ++ withinPartitionKeyColumns)
-                .toSeq
-                .map(k => col("target." + k) <=> col("source." + k))
-                .reduce(_ && _)
+        if (SparkBackend.of(execution.spark).isConnect)
+            mergeConnect(execution, df, condition, clauses)
+        else {
+            val mergeCondition = condition.getOrElse {
+                val withinPartitionKeyColumns =
+                    if (mergeKey.nonEmpty)
+                        mergeKey
+                    else if (schema.exists(_.primaryKey.nonEmpty))
+                        schema.map(_.primaryKey).get
+                    else
+                        throw new IllegalArgumentException(s"Merging Delta relation '$identifier' requires primary key in schema, explicit merge key or merge condition")
+                (SetIgnoreCase(partitions.map(_.name)) ++ withinPartitionKeyColumns)
+                    .toSeq
+                    .map(k => col("target." + k) <=> col("source." + k))
+                    .reduce(_ && _)
+            }
+            val table = deltaTable(execution)
+            DeltaUtils.merge(table, df, mergeCondition, clauses)
         }
-        val table = deltaTable(execution)
-        DeltaUtils.merge(table, df, mergeCondition, clauses)
+    }
+
+    /**
+      * Runs a merge against the (Connect) server as a MERGE SQL statement. The source DataFrame is registered as a
+      * temporary view, because a Connect client cannot build the DeltaTable-.merge() plan locally (io.delta.tables
+      * reaches into the driver session state).
+      */
+    private def mergeConnect(execution: Execution, df: DataFrame, condition: Option[Column], clauses: Seq[MergeClause]): Unit = {
+        val sourceView = "_flowman_delta_merge_source"
+        DataFrameUtils.withTempView(sourceView, df) {
+            val conditionSql = condition.map(_.toString).getOrElse {
+                val withinPartitionKeyColumns =
+                    if (mergeKey.nonEmpty)
+                        mergeKey
+                    else if (schema.exists(_.primaryKey.nonEmpty))
+                        schema.map(_.primaryKey).get
+                    else
+                        throw new IllegalArgumentException(s"Merging Delta relation '$identifier' requires primary key in schema, explicit merge key or merge condition")
+                (SetIgnoreCase(partitions.map(_.name)) ++ withinPartitionKeyColumns)
+                    .toSeq
+                    .map(k => s"target.${DeltaUtils.quoteIdentifier(k)} IS NOT DISTINCT FROM source.${DeltaUtils.quoteIdentifier(k)}")
+                    .mkString(" AND ")
+            }
+            val clauseSqls = clauses.map {
+                case InsertClause(c, columns) =>
+                    val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
+                    if (columns.nonEmpty) {
+                        val names = columns.keys.toSeq.map(DeltaUtils.quoteIdentifier).mkString(", ")
+                        val values = columns.values.toSeq.map(_.toString).mkString(", ")
+                        s" WHEN NOT MATCHED$when THEN INSERT ($names) VALUES ($values)"
+                    }
+                    else {
+                        s" WHEN NOT MATCHED$when THEN INSERT *"
+                    }
+                case UpdateClause(c, columns) =>
+                    val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
+                    if (columns.nonEmpty) {
+                        val sets = columns.map { case (k, v) => s"${DeltaUtils.quoteIdentifier(k)} = ${v.toString}" }.mkString(", ")
+                        s" WHEN MATCHED$when THEN UPDATE SET $sets"
+                    }
+                    else {
+                        s" WHEN MATCHED$when THEN UPDATE SET *"
+                    }
+                case DeleteClause(c) =>
+                    val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
+                    s" WHEN MATCHED$when THEN DELETE"
+            }
+            DeltaUtils.runMerge(execution.spark, sqlIdentifier, sourceView, conditionSql, clauseSqls)
+        }
     }
 
     /**
@@ -144,13 +230,12 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
      * @param migrationStrategy
      */
     protected def migrateInternal(execution: Execution): Unit = {
-        val table = deltaCatalogTable(execution)
-        val sourceSchema = com.dimajix.flowman.types.StructType.of(table.schema())
+        val sourceSchema = com.dimajix.flowman.types.StructType.of(deltaSchema(execution))
         val targetSchema = fullSchema.get
         val sourceTable = TableDefinition(
             TableIdentifier.empty,
             columns = sourceSchema.fields,
-            partitionColumnNames = DeltaShim.snapshot(table).metadata.partitionColumns
+            partitionColumnNames = deltaPartitionColumns(execution)
         )
         val targetTable = TableDefinition(
             TableIdentifier.empty,
@@ -161,11 +246,11 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
         val requiresMigration = TableChange.requiresMigration(sourceTable, targetTable, migrationPolicy)
 
         if (requiresMigration) {
-            doMigration(execution, table, sourceTable, targetTable)
+            doMigration(execution, sourceTable, targetTable)
             execution.refreshResource(resource)
         }
     }
-    private def doMigration(execution: Execution, table:DeltaTableV2, currentTable:TableDefinition, targetTable:TableDefinition) : Unit = {
+    private def doMigration(execution: Execution, currentTable:TableDefinition, targetTable:TableDefinition) : Unit = {
         migrationStrategy match {
             case MigrationStrategy.NEVER =>
                 logger.warn(s"Migration required for Delta relation '$identifier', but migrations are disabled.\nCurrent schema:\n${currentTable.schema.treeString}New schema:\n${targetTable.schema.treeString}")
@@ -199,51 +284,85 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
             logger.info(s"Migrating Delta relation '$identifier'. New schema:\n${targetTable.schema.treeString}")
 
             try {
-                val spark = execution.spark
-                migrations.foreach {
-                    case AddColumn(column) =>
-                        val table = deltaCatalogTable(execution)
-                        AlterTableAddColumnsDeltaCommand(
-                            table,
-                            Seq(QualifiedColumn(column.name, column.catalogType, column.nullable, column.description)
-                            )).run(spark)
-                    case UpdateColumnNullability(column, nullable) =>
-                        val table = deltaCatalogTable(execution)
-                        val oldColumn = table.schema()(column)
-                        AlterTableChangeColumnDeltaCommand(
-                            table,
-                            Seq(),
-                            column,
-                            oldColumn.copy(nullable=nullable),
-                            None
-                        ).run(spark)
-                    case UpdateColumnType(column, dataType, _, _) =>
-                        val table = deltaCatalogTable(execution)
-                        val oldColumn = table.schema()(column)
-                        AlterTableChangeColumnDeltaCommand(
-                            table,
-                            Seq(),
-                            column,
-                            oldColumn.copy(dataType=dataType.catalogType),
-                            None
-                        ).run(spark)
-                    case UpdateColumnComment(column, comment) =>
-                        val table = deltaCatalogTable(execution)
-                        val oldColumn = table.schema()(column)
-                        val field = comment.map(c => oldColumn.withComment(c))
-                            .getOrElse(oldColumn.copy(metadata = new MetadataBuilder().withMetadata(oldColumn.metadata).remove("comment").build()))
-                        AlterTableChangeColumnDeltaCommand(
-                            table,
-                            Seq(),
-                            column,
-                            field,
-                            None
-                        ).run(spark)
-                    case m => throw new UnsupportedOperationException(s"Migration $m not supported by Delta relations")
-                }
+                if (SparkBackend.of(execution.spark).isConnect)
+                    alterConnect(migrations)
+                else
+                    alterClassic(migrations)
             }
             catch {
                 case NonFatal(ex) => throw new MigrationFailedException(identifier, ex)
+            }
+        }
+
+        /**
+          * Migrates the Delta table via SQL DDL which runs on the (Connect) server. Classic-only Catalyst commands
+          * (AlterTableAddColumnsDeltaCommand / AlterTableChangeColumnDeltaCommand) are not reachable from a Connect
+          * client, so the same changes are expressed as ALTER TABLE statements.
+          */
+        def alterConnect(migrations:Seq[TableChange]) : Unit = {
+            val spark = execution.spark
+            migrations.foreach {
+                case AddColumn(column) =>
+                    val colDef = DeltaUtils.colDef(column.catalogField)
+                    spark.sql(s"ALTER TABLE $sqlIdentifier ADD COLUMNS ($colDef)")
+                case UpdateColumnNullability(column, nullable) =>
+                    val q = DeltaUtils.quoteIdentifier(column)
+                    val action = if (nullable) "DROP NOT NULL" else "SET NOT NULL"
+                    spark.sql(s"ALTER TABLE $sqlIdentifier ALTER COLUMN $q $action")
+                case UpdateColumnType(column, dataType, _, _) =>
+                    val q = DeltaUtils.quoteIdentifier(column)
+                    spark.sql(s"ALTER TABLE $sqlIdentifier CHANGE COLUMN $q $q ${dataType.catalogType.sql}")
+                case UpdateColumnComment(column, comment) =>
+                    val q = DeltaUtils.quoteIdentifier(column)
+                    val currentType = deltaSchema(execution)(column).dataType.sql
+                    val commentClause = comment.map(c => s" COMMENT '${DeltaUtils.quoteString(c)}'").getOrElse("")
+                    spark.sql(s"ALTER TABLE $sqlIdentifier CHANGE COLUMN $q $q $currentType$commentClause")
+                case m => throw new UnsupportedOperationException(s"Migration $m not supported by Delta relations")
+            }
+        }
+
+        def alterClassic(migrations:Seq[TableChange]) : Unit = {
+            val spark = execution.spark
+            migrations.foreach {
+                case AddColumn(column) =>
+                    val table = deltaCatalogTable(execution)
+                    AlterTableAddColumnsDeltaCommand(
+                        table,
+                        Seq(QualifiedColumn(column.name, column.catalogType, column.nullable, column.description)
+                        )).run(spark)
+                case UpdateColumnNullability(column, nullable) =>
+                    val table = deltaCatalogTable(execution)
+                    val oldColumn = table.schema()(column)
+                    AlterTableChangeColumnDeltaCommand(
+                        table,
+                        Seq(),
+                        column,
+                        oldColumn.copy(nullable=nullable),
+                        None
+                    ).run(spark)
+                case UpdateColumnType(column, dataType, _, _) =>
+                    val table = deltaCatalogTable(execution)
+                    val oldColumn = table.schema()(column)
+                    AlterTableChangeColumnDeltaCommand(
+                        table,
+                        Seq(),
+                        column,
+                        oldColumn.copy(dataType=dataType.catalogType),
+                        None
+                    ).run(spark)
+                case UpdateColumnComment(column, comment) =>
+                    val table = deltaCatalogTable(execution)
+                    val oldColumn = table.schema()(column)
+                    val field = comment.map(c => oldColumn.withComment(c))
+                        .getOrElse(oldColumn.copy(metadata = new MetadataBuilder().withMetadata(oldColumn.metadata).remove("comment").build()))
+                    AlterTableChangeColumnDeltaCommand(
+                        table,
+                        Seq(),
+                        column,
+                        field,
+                        None
+                    ).run(spark)
+                case m => throw new UnsupportedOperationException(s"Migration $m not supported by Delta relations")
             }
         }
 
@@ -272,6 +391,6 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
     }
 
     override protected def outputSchema(execution:Execution) : Option[StructType] = {
-        Some(deltaCatalogTable(execution).schema())
+        Some(deltaSchema(execution))
     }
 }

@@ -43,6 +43,7 @@ import com.dimajix.flowman.execution.MigrationPolicy
 import com.dimajix.flowman.execution.MigrationStrategy
 import com.dimajix.flowman.execution.Operation
 import com.dimajix.flowman.execution.OutputMode
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.execution.UnspecifiedSchemaException
 import com.dimajix.flowman.fs.HadoopUtils
 import com.dimajix.flowman.jdbc.HiveDialect
@@ -51,10 +52,10 @@ import com.dimajix.flowman.model.PartitionSchema
 import com.dimajix.flowman.model.Relation
 import com.dimajix.flowman.model.ResourceIdentifier
 import com.dimajix.flowman.model.Schema
-import com.dimajix.flowman.spark.sql.delta.DeltaShim
 import com.dimajix.flowman.spec.annotation.RelationType
 import com.dimajix.flowman.types.FieldValue
 import com.dimajix.flowman.types.SingleValue
+import com.dimajix.spark.sql.DataFrameUtils
 
 
 final case class DeltaFileRelation(
@@ -152,7 +153,7 @@ final case class DeltaFileRelation(
 
         val extDf = applyOutputSchema(execution, addPartition(df, partition))
         mode match {
-            case OutputMode.UPDATE => doUpdate(extDf, partitionSpec)
+            case OutputMode.UPDATE => doUpdate(execution, extDf, partitionSpec)
             case _ => doWrite(extDf, partitionSpec, mode)
         }
     }
@@ -173,11 +174,38 @@ final case class DeltaFileRelation(
             .mode(mode.batchMode)
             .save(location.toString)
     }
-    private def doUpdate(df: DataFrame, partitionSpec: PartitionSpec) : Unit = {
+    private def doUpdate(execution: Execution, df: DataFrame, partitionSpec: PartitionSpec) : Unit = {
+        if (SparkBackend.of(execution.spark).isConnect)
+            doUpdateConnect(df, partitionSpec)
+        else {
+            val withinPartitionKeyColumns = if (mergeKey.nonEmpty) mergeKey else schema.map(_.primaryKey).getOrElse(Seq())
+            val keyColumns = SetIgnoreCase(partitions.map(_.name)) -- partitionSpec.keys ++ withinPartitionKeyColumns
+            val table = DeltaTable.forPath(df.sparkSession, location.toString)
+            DeltaUtils.upsert(table, df, keyColumns, partitionSpec)
+        }
+    }
+    private def doUpdateConnect(df: DataFrame, partitionSpec: PartitionSpec) : Unit = {
         val withinPartitionKeyColumns = if (mergeKey.nonEmpty) mergeKey else schema.map(_.primaryKey).getOrElse(Seq())
         val keyColumns = SetIgnoreCase(partitions.map(_.name)) -- partitionSpec.keys ++ withinPartitionKeyColumns
-        val table = DeltaTable.forPath(df.sparkSession, location.toString)
-        DeltaUtils.upsert(table, df, keyColumns, partitionSpec)
+        if (keyColumns.isEmpty)
+            throw new IllegalArgumentException(s"Cannot perform upsert activity without primary key")
+        val sourceView = "_flowman_delta_upsert_source"
+        DataFrameUtils.withTempView(sourceView, df) {
+            val condition = (
+                keyColumns.map(k => s"target.${DeltaUtils.quoteIdentifier(k)} IS NOT DISTINCT FROM source.${DeltaUtils.quoteIdentifier(k)}") ++
+                partitionSpec.values.map { case (k, v) => s"target.${DeltaUtils.quoteIdentifier(k)} = ${HiveDialect.literal(v)}" }
+            ).mkString(" AND ")
+            DeltaUtils.runMerge(
+                df.sparkSession,
+                s"delta.`${location.toString}`",
+                sourceView,
+                condition,
+                Seq(
+                    " WHEN MATCHED THEN UPDATE SET *",
+                    " WHEN NOT MATCHED THEN INSERT *"
+                )
+            )
+        }
     }
 
     /**
@@ -213,7 +241,7 @@ final case class DeltaFileRelation(
      * @return
      */
     override def exists(execution: Execution): Trilean = {
-        DeltaTable.isDeltaTable(execution.spark, location.toString)
+        DeltaUtils.isDeltaTable(execution, location)
     }
 
 
@@ -228,12 +256,11 @@ final case class DeltaFileRelation(
         if (exists(execution) == Yes) {
             fullSchema match {
                 case Some(targetSchema) =>
-                    val table = deltaCatalogTable(execution)
-                    val sourceSchema = com.dimajix.flowman.types.StructType.of(table.schema())
+                    val sourceSchema = com.dimajix.flowman.types.StructType.of(deltaSchema(execution))
                     val sourceTable = TableDefinition(
                         TableIdentifier.empty,
                         columns = sourceSchema.fields,
-                        partitionColumnNames = DeltaShim.snapshot(table).metadata.partitionColumns
+                        partitionColumnNames = deltaPartitionColumns(execution)
                     )
                     val targetTable = TableDefinition(
                         TableIdentifier.empty,
@@ -264,7 +291,7 @@ final case class DeltaFileRelation(
 
         requireValidPartitionKeys(partition)
 
-        if (!DeltaTable.isDeltaTable(execution.spark, location.toString)) {
+        if (!DeltaUtils.isDeltaTable(execution, location)) {
             false
         }
         else if (partition.nonEmpty) {
@@ -316,11 +343,18 @@ final case class DeltaFileRelation(
         requireValidPartitionKeys(partitions)
 
         if (partitions.nonEmpty) {
-            val deltaTable = DeltaTable.forPath(execution.spark, location.toString)
-            PartitionSchema(this.partitions).interpolate(partitions).foreach { p =>
-                deltaTable.delete(p.predicate)
+            if (SparkBackend.of(execution.spark).isConnect) {
+                PartitionSchema(this.partitions).interpolate(partitions).foreach { p =>
+                    execution.spark.sql(s"DELETE FROM ${sqlIdentifier} WHERE ${p.predicate}")
+                }
             }
-            deltaTable.vacuum()
+            else {
+                val deltaTable = DeltaTable.forPath(execution.spark, location.toString)
+                PartitionSchema(this.partitions).interpolate(partitions).foreach { p =>
+                    deltaTable.delete(p.predicate)
+                }
+                deltaTable.vacuum()
+            }
         }
         else {
             val fs = location.getFileSystem(execution.hadoopConf)
@@ -350,7 +384,7 @@ final case class DeltaFileRelation(
         require(execution != null)
 
         val location = this.location
-        val fs = location.getFileSystem(execution.spark.sparkContext.hadoopConfiguration)
+        val fs = location.getFileSystem(execution.hadoopConf)
         if (!fs.exists(location)) {
             throw new FileNotFoundException(location.toString)
         }
@@ -379,8 +413,19 @@ final case class DeltaFileRelation(
         DeltaTable.forPath(execution.spark, location.toString)
     }
 
+    override protected def deltaSchema(execution: Execution) : StructType = {
+        if (SparkBackend.of(execution.spark).isConnect)
+            execution.spark.read.format("delta").load(location.toString).schema
+        else
+            deltaCatalogTable(execution).schema()
+    }
+
     override protected def deltaCatalogTable(execution: Execution): DeltaTableV2 = {
         DeltaTableV2(execution.spark, location)
+    }
+
+    override protected def sqlIdentifier : String = {
+        s"delta.`${location.toString}`"
     }
 }
 
