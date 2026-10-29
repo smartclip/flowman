@@ -209,12 +209,18 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
 
     override def tableExists(name:TableIdentifier) : Boolean = {
         val db = name.database.getOrElse(currentDatabase)
-        val like = name.table.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
-        val rows = spark.sql(s"SHOW TABLES IN ${quoteIdentifier(db)} LIKE '${quoteString(like)}'").collect()
-        rows.exists(row => {
-            val tableName = if (row.length >= 2) row.getString(1) else row.getString(0)
-            tableName.equalsIgnoreCase(name.table)
-        })
+        // SHOW TABLES fails with SCHEMA_NOT_FOUND for a non-existing database, but classic mode returns
+        // false. Guard with an existence check to mirror that behavior.
+        if (!databaseExists(db))
+            false
+        else {
+            val like = name.table.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
+            val rows = spark.sql(s"SHOW TABLES IN ${quoteIdentifier(db)} LIKE '${quoteString(like)}'").collect()
+            rows.exists(row => {
+                val tableName = if (row.length >= 2) row.getString(1) else row.getString(0)
+                tableName.equalsIgnoreCase(name.table)
+            })
+        }
     }
 
     override def getTable(name:TableIdentifier) : TableDefinition = {
@@ -252,8 +258,12 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             if (tableDefinition.tableType == TableType.VIEW)
                 throw new NoSuchTableException(table.database.getOrElse(""), table.table)
 
-            // Delete all partitions
-            if (tableDefinition.partitionColumns.nonEmpty) {
+            // Delete all partitions. NOTE: Delta tables do not support the Hive partition commands
+            // (SHOW PARTITIONS/ALTER TABLE ... DROP PARTITION fail with PARTITION_MANAGEMENT_IS_UNSUPPORTED)
+            // and they do not keep partition entries in the metastore either, so skip the whole partition
+            // management loop for them - the location is deleted below anyway.
+            val isDelta = tableDefinition.provider.exists(_.equalsIgnoreCase("delta"))
+            if (!isDelta && tableDefinition.partitionColumns.nonEmpty) {
                 listPartitions(table).foreach { partition =>
                     val location = getPartitionLocation(table, partition)
                     val fs = location.getFileSystem(hadoopConf)
@@ -285,8 +295,11 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
         val tableDefinition = getTable(table)
         require(tableDefinition.tableType != TableType.VIEW)
 
-        // First drop partitions (Hive will delete the partition directories as well)
-        if (tableDefinition.partitionColumns.nonEmpty) {
+        // First drop partitions (Hive will delete the partition directories as well). Delta tables do not
+        // support the Hive partition commands (PARTITION_MANAGEMENT_IS_UNSUPPORTED) and hold no partition
+        // entries in the metastore, so skip them - truncateLocation below removes their data.
+        val isDelta = tableDefinition.provider.exists(_.equalsIgnoreCase("delta"))
+        if (!isDelta && tableDefinition.partitionColumns.nonEmpty) {
             listPartitions(table).foreach(p => dropPartition(table, p, false))
         }
 
@@ -521,32 +534,54 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             case idx => idx.min
         }
 
-        val allColumns = spark.table(name.quotedString).schema.fields.map(Field.of)
-
-        val partitionRows = if (partitionIdx >= 0 && detailIdx > partitionIdx) {
-            rows.slice(partitionIdx + 1, detailIdx)
-                .filter(r => r.col.nonEmpty && !r.col.startsWith("#") && r.col != "col_name")
-        }
-        else {
-            Seq.empty
-        }
-        val partitionNames = partitionRows.map(_.col)
-        val partitionNameSet = SetIgnoreCase(partitionNames)
-
-        // The partition columns of a Hive table are always NOT NULL. The `spark.table(...)` schema however
-        // reports the analyzed (=nullable) schema, so recover the NOT NULL contract from the catalog for the
-        // partition columns just as Spark's own catalog schema does.
-        val allColumnsFixed = allColumns.map { field =>
-            if (partitionNameSet.contains(field.name))
-                field.copy(nullable = false)
-            else
-                field
-        }
-
         val detail = rows.slice(detailIdx + 1, rows.length)
             .filter(r => r.col.nonEmpty)
             .map(r => r.col -> r.dataType)
             .toMap
+
+        val provider = detail.get("Provider")
+
+        // Delta tables do not store their schema in the metastore, but as a table property. Spark's own
+        // HiveCatalog therefore reports an empty schema for them, which is what the tests and classic mode
+        // rely on. Mirror that behavior here, and skip the (relatively expensive) schema discovery for delta
+        // tables, which would resolve the table driver-side over an ANALYZE RPC.
+        val columns: Seq[com.dimajix.flowman.types.Field] =
+            if (provider.exists(_.equalsIgnoreCase("delta")))
+                Seq.empty
+            else {
+                val allColumns = spark.table(name.quotedString).schema.fields.map(Field.of)
+
+                val partitionRows = if (partitionIdx >= 0 && detailIdx > partitionIdx) {
+                    rows.slice(partitionIdx + 1, detailIdx)
+                        .filter(r => r.col.nonEmpty && !r.col.startsWith("#") && r.col != "col_name")
+                }
+                else {
+                    Seq.empty
+                }
+                val partitionNameSet = SetIgnoreCase(partitionRows.map(_.col))
+
+                // The partition columns of a Hive table are always NOT NULL. The `spark.table(...)` schema
+                // however reports the analyzed (=nullable) schema, so recover the NOT NULL contract from the
+                // catalog for the partition columns just as Spark's own catalog schema does.
+                allColumns.map { field =>
+                    if (partitionNameSet.contains(field.name))
+                        field.copy(nullable = false)
+                    else
+                        field
+                }
+            }
+
+        val partitionNames: Seq[String] =
+            if (provider.exists(_.equalsIgnoreCase("delta")))
+                Seq.empty
+            else if (partitionIdx >= 0 && detailIdx > partitionIdx) {
+                rows.slice(partitionIdx + 1, detailIdx)
+                    .filter(r => r.col.nonEmpty && !r.col.startsWith("#") && r.col != "col_name")
+                    .map(_.col)
+            }
+            else {
+                Seq.empty
+            }
 
         val tableType = detail.get("Type") match {
             case Some("VIEW") => TableType.VIEW
@@ -557,10 +592,10 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
         TableDescription(
             tableType = tableType,
             external = detail.get("Type").contains("EXTERNAL"),
-            columns = allColumnsFixed,
+            columns = columns,
             partitionColumnNames = partitionNames,
             comment = detail.get("Comment").filter(_.nonEmpty),
-            provider = detail.get("Provider"),
+            provider = provider,
             location = detail.get("Location").filter(_.nonEmpty).map(loc => {
                     new Path(loc)
             }),
