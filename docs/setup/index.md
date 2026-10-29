@@ -12,6 +12,7 @@ Moreover, managed Spark environments like AWS EMR or Azure Synapse are supported
 * [Running Flowman in AWS EMR](emr.md)
 * [Running Flowman in Azure Synapse](synapse.md)
 * [Configuration Properties](config.md)
+* [Running Flowman with Spark Connect](spark-connect.md)
 * [Building Flowman from Source](building.md)
 
 
