@@ -159,6 +159,7 @@
                             <spark.ui.showConsoleProgress>false</spark.ui.showConsoleProgress>
                             <spark.sql.shuffle.partitions>8</spark.sql.shuffle.partitions>
                             <spark.sql.warehouse.dir>file:///tmp/spark-warehouse</spark.sql.warehouse.dir>
+                            <spark.api.mode>${flowman.test.spark.api.mode}</spark.api.mode>
                         </systemProperties>
                     </configuration>
                     <executions>
