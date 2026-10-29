@@ -22,6 +22,7 @@ import io.delta.tables.DeltaTable
 import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.SparkShim
 import org.apache.spark.sql.delta.catalog.DeltaTableV2
 import org.apache.spark.sql.delta.commands.AlterTableAddColumnsDeltaCommand
 import org.apache.spark.sql.functions.col
@@ -152,7 +153,10 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
     private def mergeConnect(execution: Execution, df: DataFrame, condition: Option[Column], clauses: Seq[MergeClause]): Unit = {
         val sourceView = "_flowman_delta_merge_source"
         DataFrameUtils.withTempView(sourceView, df) {
-            val conditionSql = condition.map(_.toString).getOrElse {
+            // Spark Connect's client-side Column.toString renders the protobuf expression text (e.g.
+            // "=(a, b)"), which is not valid SQL. SparkShim.expr normalizes the connect operators to
+            // Catalyst expressions, whose `sql` is valid in both classic and Connect mode.
+            val conditionSql = condition.map(c => SparkShim.expr(c).sql).getOrElse {
                 val withinPartitionKeyColumns =
                     if (mergeKey.nonEmpty)
                         mergeKey
@@ -170,11 +174,11 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
             // clause with its kind and reorder below.
             val clauseSqls = clauses.map {
                 case InsertClause(c, columns) =>
-                    val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
+                    val when = c.map(cc => s" AND ${SparkShim.expr(cc).sql}").getOrElse("")
                     val sql =
                         if (columns.nonEmpty) {
                             val names = columns.keys.toSeq.map(DeltaUtils.quoteIdentifier).mkString(", ")
-                            val values = columns.values.toSeq.map(_.toString).mkString(", ")
+                            val values = columns.values.toSeq.map(v => SparkShim.expr(v).sql).mkString(", ")
                             s" WHEN NOT MATCHED$when THEN INSERT ($names) VALUES ($values)"
                         }
                         else {
@@ -182,10 +186,10 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
                         }
                     (false, sql)
                 case UpdateClause(c, columns) =>
-                    val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
+                    val when = c.map(cc => s" AND ${SparkShim.expr(cc).sql}").getOrElse("")
                     val sql =
                         if (columns.nonEmpty) {
-                            val sets = columns.map { case (k, v) => s"${DeltaUtils.quoteIdentifier(k)} = ${v.toString}" }.mkString(", ")
+                            val sets = columns.map { case (k, v) => s"${DeltaUtils.quoteIdentifier(k)} = ${SparkShim.expr(v).sql}" }.mkString(", ")
                             s" WHEN MATCHED$when THEN UPDATE SET $sets"
                         }
                         else {
@@ -193,7 +197,7 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
                         }
                     (true, sql)
                 case DeleteClause(c) =>
-                    val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
+                    val when = c.map(cc => s" AND ${SparkShim.expr(cc).sql}").getOrElse("")
                     (true, s" WHEN MATCHED$when THEN DELETE")
             }
             val orderedClauses = clauseSqls.collect { case (true, sql) => sql } ++ clauseSqls.collect { case (false, sql) => sql }
