@@ -66,7 +66,15 @@ object DataFrameBuilder {
      * @return
      */
     def ofRows(sparkSession: SparkSession, rows:Seq[Row], schema:StructType): DataFrame = {
-        sparkSession.createDataFrame(rows.asJava, schema)
+        if (schema.isEmpty) {
+            // SparkSession.createDataFrame(rdd, empty schema) silently ignores the row payload, whereas the
+            // Seq-based overload converts through LocalRelation.fromExternalRows and throws an
+            // ArrayIndexOutOfBoundsException for rows with more fields. Reproduce the RDD behavior here.
+            sparkSession.createDataFrame(rows.map(_ => Row.empty).asJava, schema)
+        }
+        else {
+            sparkSession.createDataFrame(rows.asJava, schema)
+        }
     }
 
     /**
