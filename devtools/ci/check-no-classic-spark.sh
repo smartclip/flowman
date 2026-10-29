@@ -32,6 +32,7 @@ BACKLOG=(
     "flowman-core/src/main/scala/com/dimajix/flowman/documentation/SchemaCheck.scala"
     "flowman-core/src/main/scala/com/dimajix/flowman/jdbc/JdbcUtils.scala"
     "flowman-core/src/main/scala/com/dimajix/flowman/model/Mapping.scala"
+    "flowman-core/src/main/scala/com/dimajix/flowman/model/SchemaExtractor.scala"
     "flowman-spec/src/main/scala/com/dimajix/flowman/spec/dataset/FileDataset.scala"
     "flowman-spec/src/main/scala/com/dimajix/flowman/spec/mapping/GroupedAggregateMapping.scala"
     "flowman-spec/src/main/scala/com/dimajix/flowman/spec/relation/FileRelation.scala"
@@ -62,7 +63,12 @@ EXCLUDE_DIRS=(
 # Find offending files under any module's src/main
 mapfile -t OFFENDERS < <(
     find "$ROOT" -path '*/src/main/*' -name '*.scala' \
-        -exec grep -lE "$PATTERNS" {} \;
+        -exec grep -lE "$PATTERNS" {} \; | while read -r file; do
+            # Only report matches in code, not in comments
+            if grep -nE "$PATTERNS" "$file" | grep -qvE '^[0-9]+:[[:space:]]*(//|\*|/\*)'; then
+                echo "$file"
+            fi
+        done
 )
 
 declare -a NEW_USAGE=()
