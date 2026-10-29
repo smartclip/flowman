@@ -55,8 +55,9 @@ object DeltaUtils {
     private[spec] def quoteString(value:String) : String = value.replace("\\", "\\\\").replace("'", "\\'")
 
     private[spec] def colDef(field:StructField) : String = {
+        val notNull = if (!field.nullable) " NOT NULL" else ""
         val comment = field.getComment().map(c => s" COMMENT '${quoteString(c)}'").getOrElse("")
-        s"${quoteIdentifier(field.name)} ${field.dataType.sql}$comment"
+        s"${quoteIdentifier(field.name)} ${field.dataType.sql}$notNull$comment"
     }
 
     /**

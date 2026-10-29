@@ -165,31 +165,39 @@ abstract class DeltaRelation(options: Map[String,String], mergeKey: Seq[String])
                     .map(k => s"target.${DeltaUtils.quoteIdentifier(k)} IS NOT DISTINCT FROM source.${DeltaUtils.quoteIdentifier(k)}")
                     .mkString(" AND ")
             }
+            // Spark's MERGE grammar requires all `WHEN MATCHED` clauses to precede all `WHEN NOT MATCHED`
+            // clauses (unlike the DeltaTable merge API, which accepts them in any order), so render each
+            // clause with its kind and reorder below.
             val clauseSqls = clauses.map {
                 case InsertClause(c, columns) =>
                     val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
-                    if (columns.nonEmpty) {
-                        val names = columns.keys.toSeq.map(DeltaUtils.quoteIdentifier).mkString(", ")
-                        val values = columns.values.toSeq.map(_.toString).mkString(", ")
-                        s" WHEN NOT MATCHED$when THEN INSERT ($names) VALUES ($values)"
-                    }
-                    else {
-                        s" WHEN NOT MATCHED$when THEN INSERT *"
-                    }
+                    val sql =
+                        if (columns.nonEmpty) {
+                            val names = columns.keys.toSeq.map(DeltaUtils.quoteIdentifier).mkString(", ")
+                            val values = columns.values.toSeq.map(_.toString).mkString(", ")
+                            s" WHEN NOT MATCHED$when THEN INSERT ($names) VALUES ($values)"
+                        }
+                        else {
+                            s" WHEN NOT MATCHED$when THEN INSERT *"
+                        }
+                    (false, sql)
                 case UpdateClause(c, columns) =>
                     val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
-                    if (columns.nonEmpty) {
-                        val sets = columns.map { case (k, v) => s"${DeltaUtils.quoteIdentifier(k)} = ${v.toString}" }.mkString(", ")
-                        s" WHEN MATCHED$when THEN UPDATE SET $sets"
-                    }
-                    else {
-                        s" WHEN MATCHED$when THEN UPDATE SET *"
-                    }
+                    val sql =
+                        if (columns.nonEmpty) {
+                            val sets = columns.map { case (k, v) => s"${DeltaUtils.quoteIdentifier(k)} = ${v.toString}" }.mkString(", ")
+                            s" WHEN MATCHED$when THEN UPDATE SET $sets"
+                        }
+                        else {
+                            s" WHEN MATCHED$when THEN UPDATE SET *"
+                        }
+                    (true, sql)
                 case DeleteClause(c) =>
                     val when = c.map(cc => s" AND ${cc.toString}").getOrElse("")
-                    s" WHEN MATCHED$when THEN DELETE"
+                    (true, s" WHEN MATCHED$when THEN DELETE")
             }
-            DeltaUtils.runMerge(execution.spark, sqlIdentifier, sourceView, conditionSql, clauseSqls)
+            val orderedClauses = clauseSqls.collect { case (true, sql) => sql } ++ clauseSqls.collect { case (false, sql) => sql }
+            DeltaUtils.runMerge(execution.spark, sqlIdentifier, sourceView, conditionSql, orderedClauses)
         }
     }
 
