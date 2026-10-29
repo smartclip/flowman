@@ -33,6 +33,23 @@ import LocalSparkSession.logger
 
 object LocalSparkSession {
     private val logger = org.slf4j.LoggerFactory.getLogger(classOf[LocalSparkSession])
+
+    /**
+      * A single embedded Derby metastore shared by all suites of one JVM in Connect mode.
+      *
+      * The in-process Spark Connect server runs on a JVM-wide gRPC thread pool, and Hive caches its
+      * metastore client (and session state) in JVM-wide thread-locals. With a per-suite metastore a
+      * reused gRPC thread could keep talking to the previous suite's Derby database, making tables
+      * created in the current suite invisible. Sharing one metastore for the whole JVM removes that
+      * divergence. (Classic mode keeps one metastore per suite, since Spark creates a new context
+      * and executor threads for every suite anyway.)
+      */
+    private[testing] lazy val sharedMetastorePath : String = {
+        // NOTE: the directory must not exist yet, Derby creates the database directory itself.
+        val dir = new java.io.File(System.getProperty("java.io.tmpdir"), "flowman-metastore-" + java.util.UUID.randomUUID())
+        dir.deleteOnExit()
+        dir.getCanonicalPath
+    }
 }
 
 /**
@@ -94,7 +111,10 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
     override def beforeAll() : Unit = {
         super.beforeAll()
 
-        val localMetastorePath = new File(tempDir, "metastore").getCanonicalPath
+        val localMetastorePath = if (isSparkConnectEnabled)
+            LocalSparkSession.sharedMetastorePath
+        else
+            new File(tempDir, "metastore").getCanonicalPath
         val localWarehousePath = new File(tempDir, "warehouse").getCanonicalPath
         val checkpointPath  = new File(tempDir, "checkpoints").getCanonicalPath
         val streamingCheckpointPath  = new File(tempDir, "streamingCheckpoints").getCanonicalPath
@@ -140,6 +160,10 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
                 }
             }
             builder.config("spark.hadoop.javax.jdo.option.ConnectionURL", s"jdbc:derby:;databaseName=$localMetastorePath;create=true")
+                .config("spark.hadoop.datanucleus.connectionPool", "None")
+                .config("spark.hadoop.datanucleus.connectionPoolingType", "None")
+                .config("spark.hadoop.datanucleus.connectionPoolingType.nontx", "None")
+                .config("spark.hadoop.datanucleus.retainValues", true)
                 .config("spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName", "org.datanucleus.store.rdbms.adapter.DerbyAdapter")
                 .config("spark.hadoop.datanucleus.schema.autoCreateTables", true)
                 .config("spark.hadoop.datanucleus.schema.autoCreateAll", true)
@@ -150,7 +174,7 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
                 .config("spark.hadoop.hive.metastore.schema.verification.record.version", true)
                 .config("spark.hadoop.hive.metastore.schema.verification", false)
                 .config("spark.hadoop.hive.metastore.uris", "")
-                .config("spark.sql.hive.metastore.sharedPrefixes", "org.apache.derby")
+                .config("spark.sql.hive.metastore.sharedPrefixes", "nothing.here")
 
             // Either way, we get some warnings, depending on the Hive features being used
             val version = HiveVersionInfo.getShortVersion.split('.')
@@ -236,7 +260,14 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
         // metastore, warehouse, session time zone, executor sizing, ...) are already configured on
         // the server session above, so the client only needs the connection details. Static configs
         // like "spark.sql.warehouse.dir" cannot be changed from a Connect client and must not be
-        // set here.
+        // set here. In particular the test JVM sets "spark.sql.warehouse.dir" as a system property
+        // (scalatest-maven-plugin), which the Connect client builder otherwise auto-loads into its
+        // SparkConf and pushes to the server as a `config` RPC, failing with
+        // CANNOT_MODIFY_STATIC_CONFIG. The server already has the correct value, so the client
+        // simply must not carry the property.
+        val warehouseDirProperty = System.getProperty("spark.sql.warehouse.dir")
+        if (warehouseDirProperty != null)
+            System.clearProperty("spark.sql.warehouse.dir")
         val clientBuilder = SparkSession.builder()
             .config("spark.api.mode", "connect")
             // NOTE: The SparkSessionBuilder reads the remote connection string from
