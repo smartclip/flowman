@@ -280,6 +280,16 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
 
         configureSpark(clientBuilder)
 
+        // Spark Connect's `getOrCreate()` returns a stopped-but-still-active session, after which every RPC
+        // fails forever ("Channel shutdown invoked"). A previous suite's client session may still be active
+        // (its shutdown can be asynchronous), so never reuse it - always create a fresh client session. Only
+        // clear a stale Connect session; the classic server session must stay active for the in-process
+        // Connect server to create isolated sessions.
+        val staleConnectSession = SparkSession.getActiveSession.exists(_.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+        if (staleConnectSession) {
+            SparkSession.clearActiveSession()
+            SparkSession.clearDefaultSession()
+        }
         val spark = clientBuilder.getOrCreate()
 
         _spark = Some(spark)
