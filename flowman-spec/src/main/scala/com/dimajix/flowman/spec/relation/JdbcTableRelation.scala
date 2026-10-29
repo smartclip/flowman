@@ -260,7 +260,7 @@ abstract class JdbcTableRelationBase(
             case Some(stagingTable) =>
                 withConnection { (con, options) =>
                     val stagingSchema = JdbcUtils.getTableSchema(con, tableIdentifier, options)
-                    withStagingTable(execution, con, options, df, Some(stagingSchema)) {
+                    withStagingTable(execution, con, options, df, Some(stagingSchema), stagingTable) {
                         withTransaction(con) {
                             withStatement(con, options) { statement =>
                                 logger.debug(s"Truncating table ${tableIdentifier}")
@@ -285,7 +285,7 @@ abstract class JdbcTableRelationBase(
             case Some(stagingTable) =>
                 withConnection { (con, options) =>
                     val stagingSchema = JdbcUtils.getTableSchema(con, tableIdentifier, options)
-                    withStagingTable(execution, con, options, df, Some(stagingSchema)) {
+                    withStagingTable(execution, con, options, df, Some(stagingSchema), stagingTable) {
                         withTransaction(con) {
                             withStatement(con, options) { statement =>
                                 val condition = partitionCondition(partition, options)
@@ -306,7 +306,7 @@ abstract class JdbcTableRelationBase(
             case Some(stagingTable) =>
                 withConnection { (con, options) =>
                     val stagingSchema = JdbcUtils.getTableSchema(con, tableIdentifier, options)
-                    withStagingTable(execution, con, options, df, Some(stagingSchema)) {
+                    withStagingTable(execution, con, options, df, Some(stagingSchema), stagingTable) {
                         withTransaction(con) {
                             withStatement(con, options) { statement =>
                                 logger.info(s"Copying data from temporary staging table ${stagingTable} into table ${tableIdentifier}")
@@ -329,10 +329,9 @@ abstract class JdbcTableRelationBase(
         doMerge(execution, df, Some(stagingSchema), mergeCondition, clauses)
     }
 
-    private def withStagingTable[T](execution:Execution, con:java.sql.Connection, options: JDBCOptions, df:DataFrame, schema:Option[FlowmanStructType])(fn: => T) : T = {
+    private def withStagingTable[T](execution:Execution, con:java.sql.Connection, options: JDBCOptions, df:DataFrame, schema:Option[FlowmanStructType], stagingTable:TableIdentifier)(fn: => T) : T = {
         val currentSchema = schema.map(schema => JdbcUtils.createSchema(df.schema, schema)).getOrElse(FlowmanStructType.of(df.schema))
         val stagingSchema = SchemaUtils.dropComments(currentSchema)
-        val stagingTable = this.stagingIdentifier.get
         logger.info(s"Creating staging table ${stagingTable} with schema\n${stagingSchema.treeString}")
 
         // First drop temp table if it already exists
@@ -395,14 +394,26 @@ abstract class JdbcTableRelationBase(
     }
     protected def doMerge(execution: Execution, df: DataFrame, stagingSchema:Option[FlowmanStructType], condition:Column, clauses: Seq[MergeClause]) : Unit = {
         val targetSchema = outputSchema(execution)
-        stagingIdentifier match {
+        // The direct merge path uses df.rdd.foreachPartition, which is not available on a Spark Connect client.
+        // In that case fall back to the staging table path, which only needs a server-side JDBC write and a
+        // plain SQL MERGE executed on the client's JDBC connection.
+        val staging = stagingIdentifier.orElse {
+            if (execution.backend.isConnect) {
+                val suffix = java.util.UUID.randomUUID().toString.replace("-", "").take(8)
+                Some(tableIdentifier.copy(table = tableIdentifier.table + "_stg_" + suffix))
+            }
+            else {
+                None
+            }
+        }
+        staging match {
             case None =>
                 val props = createConnectionProperties()
                 val options = new JDBCOptions(props)
                 JdbcUtils.mergeTable(tableIdentifier, "target", targetSchema, df, "source", condition, clauses, options)
             case Some(stagingTable) =>
                 withConnection { (con, options) =>
-                    withStagingTable(execution, con, options, df, stagingSchema) {
+                    withStagingTable(execution, con, options, df, stagingSchema, stagingTable) {
                         withTransaction(con) {
                             withStatement(con, options) { statement =>
                                 logger.info(s"Merging data from temporary staging table ${stagingTable} into table ${tableIdentifier}")
