@@ -248,7 +248,7 @@ object Session {
                 // fail forever. Flowman therefore never reuses a Spark Connect session, but always
                 // creates a new one owned by the Flowman Session.
                 val isConnect =
-                    SparkSession.getActiveSession.exists(_.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+                    SparkSession.getActiveSession.exists(com.dimajix.spark.sql.SparkSessionUtils.isConnect)
                 if (isConnect)
                     SparkSession.clearActiveSession()
                 builder.getOrCreate()
@@ -410,9 +410,6 @@ final class Session private[execution](
         // Register additional planning strategies and optimizations
         _backend.registerStrategies(flowmanConf.getConf(FlowmanConf.SPARK_EAGER_CACHE))
 
-        // Apply all session extensions
-        SparkExtension.extensions.foreach(_.register(spark, config))
-
         // Register special UDFs and extension hooks
         _backend.registerExtension(config)
 
@@ -545,8 +542,14 @@ final class Session private[execution](
 
     private lazy val _catalog = {
         val externalCatalogs = _namespace.toSeq.flatMap(_.catalogs).map(_.instantiate(namespaceContext))
-        if (SparkBackend.of(spark).isConnect)
+        if (SparkBackend.of(spark).isConnect) {
+            if (externalCatalogs.nonEmpty)
+                logger.warn(
+                    "External catalogs are not supported in Spark Connect mode; ignoring " +
+                        externalCatalogs.map(_.getClass.getName).mkString(", ")
+                )
             new ConnectHiveCatalog(spark, config)
+        }
         else
             new ClassicHiveCatalog(spark, config, externalCatalogs)
     }
