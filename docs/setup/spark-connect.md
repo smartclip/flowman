@@ -32,17 +32,20 @@ plugin requires Spark 4.x.
 
 ### Installation
 
-The plugin is not a shaded jar and must be installed together with the Flowman modules it uses. Copy the following
-jars from the Flowman distribution into the `jars` directory of the Spark Connect server (or add them to its
-classpath):
+The build produces a self-contained plugin jar with the `server` classifier
+(`flowman-connect-server_2.13-<version>-server.jar`). It bundles only the Flowman classes; Spark, Hadoop, Scala and
+all other third-party libraries are expected to be provided by the Spark installation. Copy that single jar into the
+`jars` directory of the Spark Connect server (or add it to its classpath):
 
-* `flowman-connect-server_2.13-<version>.jar`
-* `flowman-connect-common_2.13-<version>.jar`
-* `flowman-spark-extensions_2.13-<version>.jar`
-* `flowman-core_2.13-<version>.jar`
+```bash
+cp flowman-connect-server_2.13-<version>-server.jar $SPARK_HOME/jars/
+```
+
+Alternatively, the regular module jar can be used together with the `flowman-connect-common`,
+`flowman-spark-extensions` and `flowman-core` jars.
 
 The plugin classes are registered via the standard Spark Connect plugin service loader mechanism
-(`META-INF/services`). Restart the Spark Connect server after installing the jars.
+(`META-INF/services`). Restart the Spark Connect server after installing the jar.
 
 The client and server exchange a protocol version during the handshake. If the versions do not match, the client
 disables all plugin features and logs a warning; Flowman then continues to work with the public Spark Connect API.

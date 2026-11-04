@@ -25,6 +25,47 @@
                 <groupId>org.scalatest</groupId>
                 <artifactId>scalatest-maven-plugin</artifactId>
             </plugin>
+            <plugin>
+                <!-- Self-contained server plugin jar. Only the Flowman classes are bundled (Spark, Hadoop, Scala
+                     and all other third-party libraries are provided by the Spark installation), so the jar can
+                     be copied into $SPARK_HOME/jars without pulling conflicting dependencies. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>server</shadedClassifierName>
+                            <artifactSet>
+                                <includes>
+                                    <include>com.dimajix.flowman:flowman-common-java</include>
+                                    <include>com.dimajix.flowman:flowman-common</include>
+                                    <include>com.dimajix.flowman:flowman-connect-common</include>
+                                    <include>com.dimajix.flowman:flowman-spark-extensions</include>
+                                    <include>com.dimajix.flowman:flowman-core</include>
+                                </includes>
+                            </artifactSet>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
