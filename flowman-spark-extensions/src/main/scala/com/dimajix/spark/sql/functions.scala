@@ -28,20 +28,33 @@ import org.apache.spark.sql.functions.struct
 import org.apache.spark.sql.functions.when
 import org.apache.spark.util.LongAccumulator
 import com.dimajix.spark.sql.catalyst.plans.logical.CountRecords
+import com.dimajix.spark.sql.expressions.CreateNullableStruct
 
 
 class functions
 object functions {
+    private val connectMode = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+      * Tells this object whether expressions will be evaluated against a Spark Connect session. This is maintained
+      * by [[com.dimajix.flowman.execution.SparkBackend]], since some helper functions need to avoid classic-only
+      * Catalyst expressions when running against a Spark Connect endpoint.
+      */
+    def setConnectMode(connect:Boolean) : Unit = connectMode.set(connect)
+    def isConnectMode : Boolean = connectMode.get()
+
     /**
       * Creates a struct with the given values which evaluates to `NULL` if and only if all values are `NULL`.
-      * This mirrors the semantics of the (classic) `named_nullable_struct` expression, but is expressed via the
-      * public Spark API, so that it can also be serialized by a Spark Connect client. Note that the classic
-      * expression used to preserve metadata of aliased child expressions in the struct field metadata, which is
-      * not possible with the public API.
+      * In classic Spark mode this uses the `named_nullable_struct` expression, which also preserves metadata of
+      * aliased child expressions. In Spark Connect mode the expression cannot be serialized by the client, so a
+      * semantically equivalent variant built from the public API is used instead (at the cost of dropping the
+      * child metadata and possibly evaluating non-deterministic children twice).
       */
     @scala.annotation.varargs
     def nullable_struct(cols: Column*): Column = {
-        if (cols.isEmpty)
+        if (!isConnectMode)
+            SparkShim.column(CreateNullableStruct(cols.map(SparkShim.expr)))
+        else if (cols.isEmpty)
             when(lit(true), lit(null)).otherwise(struct())
         else
             when(cols.map(_.isNull).reduce(_ && _), lit(null)).otherwise(struct(cols:_*))

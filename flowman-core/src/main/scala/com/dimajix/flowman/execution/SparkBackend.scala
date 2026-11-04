@@ -115,9 +115,13 @@ trait SparkBackend {
 
 object SparkBackend {
     def of(spark:SparkSession) : SparkBackend = {
-        if (spark.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+        if (com.dimajix.spark.sql.SparkSessionUtils.isConnect(spark)) {
+            com.dimajix.spark.sql.functions.setConnectMode(true)
             new ConnectBackend(spark)
-        else
+        }
+        else {
+            com.dimajix.spark.sql.functions.setConnectMode(false)
             new ClassicBackend(spark)
+        }
     }
 }
