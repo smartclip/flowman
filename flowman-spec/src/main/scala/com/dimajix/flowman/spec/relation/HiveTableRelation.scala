@@ -25,7 +25,6 @@ import org.apache.spark.sql.SparkShim
 import org.apache.spark.sql.catalyst.analysis.PartitionAlreadyExistsException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
-import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.hive.execution.InsertIntoHiveTable
 import org.apache.spark.sql.internal.HiveSerDe
 import org.apache.spark.sql.types.CharType
@@ -219,36 +218,61 @@ final case class HiveTableRelation(
         }
     }
 
+    private def quoteIdentifier(name:String) : String = s"`${name.replace("`", "``")}`"
+
+    private def quoteString(value:String) : String = "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
     private def writeHiveTable(execution: Execution, df:DataFrame, partitionSpec: PartitionSpec, mode: OutputMode) : Unit = {
         val spark = execution.spark
         val catalog = execution.catalog
 
         if (execution.backend.isConnect) {
-            // A Spark Connect client cannot construct an InsertIntoHiveTable command. Instead the partition
-            // columns are added as constant values and the datasource writer performs a dynamic partition insert
-            if (partitions.nonEmpty && partitionSpec.isEmpty && mode == OutputMode.OVERWRITE) {
-                catalog.truncateTable(table)
-            }
+            // A Spark Connect client cannot construct an InsertIntoHiveTable command. Static partition writes
+            // are expressed as "INSERT [OVERWRITE] TABLE ... PARTITION (k='v') SELECT ... FROM <view>", so that
+            // (a) the partition values are matched by name rather than by column position and (b) an overwrite
+            // only touches the addressed partition (a dynamic overwrite would replace the whole table with the
+            // default partitionOverwriteMode=static).
             val tableDef = catalog.getTable(table)
-            val partitionTypes = tableDef.partitionSchema.fields.map(f => f.name -> f.sparkType).toMap
-            val partitionedDf = partitionSpec.values.map { case (name, value) =>
-                name -> FieldValue.asString(value)
-            }.foldLeft(df) { case (acc, (name, value)) =>
-                val colType = partitionTypes.get(name).map(t => lit(value).cast(t)).getOrElse(lit(value))
-                acc.withColumn(name, colType)
-            }
-            partitionedDf.write
-                .mode(mode.batchMode)
-                .options(options)
-                .insertInto(table.unquotedString)
-
-            // The datasource writer does not register newly created partitions in the Hive metastore, so
-            // synchronize the partition catalog with the file system
-            if (partitions.nonEmpty) {
-                spark.sql(s"MSCK REPAIR TABLE ${table.quotedString}")
-            }
             if (partitionSpec.nonEmpty) {
+                val partitionValues = tableDef.partitionColumnNames.map { name =>
+                    val value = partitionSpec.get(name).getOrElse(
+                        throw new IllegalArgumentException(
+                            s"Missing value for partition column '$name' of table ${table.quotedString}"
+                        )
+                    )
+                    name -> FieldValue.asString(value)
+                }
+                val viewName = "_flowman_hive_insert_" + java.util.UUID.randomUUID().toString.replace('-', '_')
+                df.createOrReplaceTempView(viewName)
+                try {
+                    val partitionClause = partitionValues
+                        .map { case (name, value) => s"${quoteIdentifier(name)} = ${quoteString(value)}" }
+                        .mkString(", ")
+                    val insert = mode match {
+                        case OutputMode.OVERWRITE | OutputMode.OVERWRITE_DYNAMIC => "INSERT OVERWRITE"
+                        case _ => "INSERT INTO"
+                    }
+                    spark.sql(s"$insert TABLE ${table.quotedString} PARTITION ($partitionClause) SELECT * FROM $viewName")
+                }
+                finally {
+                    spark.catalog.dropTempView(viewName)
+                }
                 catalog.refreshPartition(table, partitionSpec)
+            }
+            else {
+                if (partitions.nonEmpty && mode == OutputMode.OVERWRITE) {
+                    catalog.truncateTable(table)
+                }
+                df.write
+                    .mode(mode.batchMode)
+                    .options(options)
+                    .insertInto(table.unquotedString)
+
+                // The datasource writer does not register newly created partitions in the Hive metastore, so
+                // synchronize the partition catalog with the file system
+                if (partitions.nonEmpty) {
+                    spark.sql(s"MSCK REPAIR TABLE ${table.quotedString}")
+                }
             }
         }
         else if (partitionSpec.nonEmpty) {

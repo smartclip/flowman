@@ -281,25 +281,25 @@ final case class HiveViewRelation(
 
     private def buildMappingSql(executor: Execution, output:MappingOutputIdentifier) : String = {
         val mapping = context.getMapping(output.mapping)
-        val df = executor.instantiate(mapping, output.output)
         if (executor.backend.isConnect) {
-            // A Spark Connect client cannot access `df.queryExecution` to serialize the analyzed SQL
-            // plan. If the mapping is backed by an explicit SQL SELECT statement, reuse it directly (the
-            // resulting Hive view then references only permanent objects). Otherwise the mapping output
-            // is temporarily registered as a session view on the server and the Hive view is defined
-            // against it.
+            // A Spark Connect client cannot access `df.queryExecution` to serialize the analyzed SQL plan.
+            // Only mappings backed by an explicit SQL statement can be turned into a (live) Hive view; any
+            // other mapping would have to be materialized as a snapshot table, which silently changes the
+            // semantics and would share a single table name between all views.
             mapping match {
                 case sqlMapping: SqlMapping if sqlMapping.sql.exists(_.nonEmpty) =>
                     sqlMapping.sql.get
                 case _ =>
-                    // Materialize the mapping output as a permanent managed table. A permanent Hive view
-                    // cannot reference temporary objects, so the temp view approach does not work here.
-                    val tempTable = "_flowman_hive_view_mapping"
-                    df.write.mode(org.apache.spark.sql.SaveMode.Overwrite).saveAsTable(tempTable)
-                    s"SELECT * FROM $tempTable"
+                    throw new UnsupportedOperationException(
+                        s"Hive view relation '$identifier' is backed by mapping '${output.mapping}', which is " +
+                            "not an explicit SQL mapping. Deriving a view definition from a mapping plan is not " +
+                            "supported in Spark Connect mode; use a 'sql' mapping or specify an explicit SQL " +
+                            "statement on the view."
+                    )
             }
         }
         else {
+            val df = executor.instantiate(mapping, output.output)
             new SqlBuilder(df).toSQL
         }
     }

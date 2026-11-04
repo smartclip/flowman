@@ -29,7 +29,6 @@ import org.slf4j.LoggerFactory
 import com.dimajix.common.MapIgnoreCase
 import com.dimajix.common.SetIgnoreCase
 import com.dimajix.flowman.config.Configuration
-import com.dimajix.flowman.fs.HadoopUtils
 import com.dimajix.flowman.model.PartitionField
 import com.dimajix.flowman.model.PartitionSchema
 import com.dimajix.flowman.types.DateType
@@ -49,12 +48,6 @@ import com.dimajix.flowman.types.TimestampType
   */
 final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration) extends Catalog {
     private val logger = LoggerFactory.getLogger(classOf[ConnectHiveCatalog])
-
-    private val hadoopConf = {
-        val sparkConf = new org.apache.spark.SparkConf(false)
-        spark.conf.getAll.foreach { case (key, value) => sparkConf.set(key, value) }
-        org.apache.spark.sql.SparkShim.getHadoopConf(sparkConf)
-    }
 
     private case class DescribeRow(col: String, dataType: String, comment: String)
 
@@ -123,15 +116,15 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
         val db = quoteIdentifier(database)
         spark.sql(s"SHOW TABLES IN $db")
             .collect()
+            .filter(row => !isTemporaryRow(row))
             .map { row =>
-                if (row.length >= 3 && !row.getBoolean(2))
-                    row.getString(1)
-                else if (row.length >= 2)
-                    row.getString(1)
-                else
-                    row.getString(0)
+                val name = if (row.length >= 2) row.getString(1) else row.getString(0)
+                TableIdentifier(name, Seq(database))
             }
-            .map(name => TableIdentifier(name, Seq(database)))
+    }
+
+    private def isTemporaryRow(row:org.apache.spark.sql.Row) : Boolean = {
+        row.schema.fieldNames.contains("isTemporary") && row.getBoolean(row.schema.fieldIndex("isTemporary"))
     }
 
     override def listTables(database:String, pattern:String) : Seq[TableIdentifier] = {
@@ -209,12 +202,18 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
 
     override def tableExists(name:TableIdentifier) : Boolean = {
         val db = name.database.getOrElse(currentDatabase)
-        val like = name.table.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
-        val rows = spark.sql(s"SHOW TABLES IN ${quoteIdentifier(db)} LIKE '${quoteString(like)}'").collect()
-        rows.exists(row => {
-            val tableName = if (row.length >= 2) row.getString(1) else row.getString(0)
-            tableName.equalsIgnoreCase(name.table)
-        })
+        // SHOW TABLES fails with SCHEMA_NOT_FOUND for a non-existing database, but classic mode returns
+        // false. Guard with an existence check to mirror that behavior.
+        if (!databaseExists(db))
+            false
+        else {
+            val like = name.table.replace("\\", "\\\\").replace("_", "\\_").replace("%", "\\%")
+            val rows = spark.sql(s"SHOW TABLES IN ${quoteIdentifier(db)} LIKE '${quoteString(like)}'").collect()
+            rows.exists(row => {
+                val tableName = if (row.length >= 2) row.getString(1) else row.getString(0)
+                !isTemporaryRow(row) && tableName.equalsIgnoreCase(name.table)
+            })
+        }
     }
 
     override def getTable(name:TableIdentifier) : TableDefinition = {
@@ -252,26 +251,12 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             if (tableDefinition.tableType == TableType.VIEW)
                 throw new NoSuchTableException(table.database.getOrElse(""), table.table)
 
-            // Delete all partitions
-            if (tableDefinition.partitionColumns.nonEmpty) {
-                listPartitions(table).foreach { partition =>
-                    val location = getPartitionLocation(table, partition)
-                    val fs = location.getFileSystem(hadoopConf)
-                    HadoopUtils.deleteLocation(fs, location)
-                    dropPartition(table, partition)
-                }
-            }
-
-            // Drop the table itself
+            // Do not delete the table location from the client side: the data lives on the server's file system,
+            // which may not be reachable from the client (or a client-local "file:" path would delete the wrong
+            // files). Managed tables are cleaned up by the server as part of DROP TABLE; the data of external
+            // tables is intentionally retained (as with plain Spark/Hive).
             val ifExists = if (ignoreIfNotExists) "IF EXISTS " else ""
             spark.sql(s"DROP TABLE $ifExists${table.quotedString}")
-
-            // Delete the location to clean up any remaining files (Spark will not delete the data
-            // of an EXTERNAL table on DROP)
-            tableDefinition.location.foreach { location =>
-                val fs = location.getFileSystem(hadoopConf)
-                HadoopUtils.deleteLocation(fs, location)
-            }
         }
         else if (!ignoreIfNotExists) {
             throw new NoSuchTableException(table.database.getOrElse(""), table.table)
@@ -285,15 +270,9 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
         val tableDefinition = getTable(table)
         require(tableDefinition.tableType != TableType.VIEW)
 
-        // First drop partitions (Hive will delete the partition directories as well)
-        if (tableDefinition.partitionColumns.nonEmpty) {
-            listPartitions(table).foreach(p => dropPartition(table, p, false))
-        }
-
-        // Then clean up the table location from any remainders
-        val location = tableDefinition.location.getOrElse(throw new NoSuchTableException(table.database.getOrElse(""), table.table))
-        val fs = location.getFileSystem(hadoopConf)
-        HadoopUtils.truncateLocation(fs, location)
+        // TRUNCATE TABLE is executed on the server and also removes the data of all partitions (and of delta
+        // tables). Deleting the files from the client side would target the wrong file system in a remote setup.
+        spark.sql(s"TRUNCATE TABLE ${table.quotedString}")
 
         refreshTable(table)
     }
@@ -435,7 +414,7 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             val values = row.split("/").map { kv =>
                 val idx = kv.indexOf('=')
                 val key = if (idx >= 0) kv.substring(0, idx) else kv
-                val value = if (idx >= 0) java.net.URLDecoder.decode(kv.substring(idx + 1), "UTF-8") else ""
+                val value = if (idx >= 0) org.apache.spark.sql.catalyst.catalog.ExternalCatalogUtils.unescapePathName(kv.substring(idx + 1)) else ""
                 key -> value
             }.toMap
             PartitionSpec(MapIgnoreCase(values))
@@ -458,10 +437,11 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
 
     override def dropView(table:TableIdentifier, ignoreIfNotExists:Boolean=false) : Unit = {
         require(table != null)
-        if (ignoreIfNotExists && !tableExists(table)) {
+        if (!ignoreIfNotExists && !tableExists(table)) {
             throw new NoSuchTableException(table.database.getOrElse(""), table.table)
         }
-        spark.sql(s"DROP VIEW IF EXISTS ${table.quotedString}")
+        val ifExists = if (ignoreIfNotExists) "IF EXISTS " else ""
+        spark.sql(s"DROP VIEW $ifExists${table.quotedString}")
     }
 
 
@@ -470,20 +450,12 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
     }
 
     private def updateColumnNullability(table:TableIdentifier, column:String, nullable:Boolean) : Unit = {
-        val field = columnField(table, column)
         val nullability = if (nullable) "DROP NOT NULL" else "SET NOT NULL"
-        spark.sql(s"ALTER TABLE ${table.quotedString} ALTER COLUMN ${quoteIdentifier(column)} TYPE ${field.catalogType.sql} $nullability")
+        spark.sql(s"ALTER TABLE ${table.quotedString} ALTER COLUMN ${quoteIdentifier(column)} $nullability")
     }
 
     private def updateColumnComment(table:TableIdentifier, column:String, comment:String) : Unit = {
-        val field = columnField(table, column)
-        spark.sql(s"ALTER TABLE ${table.quotedString} ALTER COLUMN ${quoteIdentifier(column)} TYPE ${field.catalogType.sql} COMMENT '${quoteString(comment)}'")
-    }
-
-    private def columnField(table:TableIdentifier, column:String) : Field = {
-        getTable(table).columns
-            .find(_.name.equalsIgnoreCase(column))
-            .getOrElse(throw new IllegalArgumentException(s"Table column $column does not exist in table $table"))
+        spark.sql(s"ALTER TABLE ${table.quotedString} ALTER COLUMN ${quoteIdentifier(column)} COMMENT '${quoteString(comment)}'")
     }
 
     private def colDef(field:Field) : String = {
@@ -500,10 +472,13 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
     private def partitionValue(value:Any) : String = {
         value match {
             case null => "NULL"
-            case s:String => s"'${quoteString(s)}'"
+            case _:Number => value.toString
+            case _:java.lang.Boolean => value.toString
+            case _:java.sql.Date | _:java.sql.Timestamp | _:java.time.temporal.Temporal =>
+                s"'${quoteString(value.toString)}'"
             case other =>
-                val str = other.toString
-                if (str.isEmpty) s"''" else str
+                val str = FieldValue.asString(other)
+                if (str.isEmpty) s"''" else s"'${quoteString(str)}'"
         }
     }
 
@@ -521,32 +496,54 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             case idx => idx.min
         }
 
-        val allColumns = spark.table(name.quotedString).schema.fields.map(Field.of)
-
-        val partitionRows = if (partitionIdx >= 0 && detailIdx > partitionIdx) {
-            rows.slice(partitionIdx + 1, detailIdx)
-                .filter(r => r.col.nonEmpty && !r.col.startsWith("#") && r.col != "col_name")
-        }
-        else {
-            Seq.empty
-        }
-        val partitionNames = partitionRows.map(_.col)
-        val partitionNameSet = SetIgnoreCase(partitionNames)
-
-        // The partition columns of a Hive table are always NOT NULL. The `spark.table(...)` schema however
-        // reports the analyzed (=nullable) schema, so recover the NOT NULL contract from the catalog for the
-        // partition columns just as Spark's own catalog schema does.
-        val allColumnsFixed = allColumns.map { field =>
-            if (partitionNameSet.contains(field.name))
-                field.copy(nullable = false)
-            else
-                field
-        }
-
         val detail = rows.slice(detailIdx + 1, rows.length)
             .filter(r => r.col.nonEmpty)
             .map(r => r.col -> r.dataType)
             .toMap
+
+        val provider = detail.get("Provider")
+
+        // Delta tables do not store their schema in the metastore, but as a table property. Spark's own
+        // HiveCatalog therefore reports an empty schema for them, which is what the tests and classic mode
+        // rely on. Mirror that behavior here, and skip the (relatively expensive) schema discovery for delta
+        // tables, which would resolve the table driver-side over an ANALYZE RPC.
+        val columns: Seq[com.dimajix.flowman.types.Field] =
+            if (provider.exists(_.equalsIgnoreCase("delta")))
+                Seq.empty
+            else {
+                val allColumns = spark.table(name.quotedString).schema.fields.map(Field.of)
+
+                val partitionRows = if (partitionIdx >= 0 && detailIdx > partitionIdx) {
+                    rows.slice(partitionIdx + 1, detailIdx)
+                        .filter(r => r.col.nonEmpty && !r.col.startsWith("#") && r.col != "col_name")
+                }
+                else {
+                    Seq.empty
+                }
+                val partitionNameSet = SetIgnoreCase(partitionRows.map(_.col))
+
+                // The partition columns of a Hive table are always NOT NULL. The `spark.table(...)` schema
+                // however reports the analyzed (=nullable) schema, so recover the NOT NULL contract from the
+                // catalog for the partition columns just as Spark's own catalog schema does.
+                allColumns.map { field =>
+                    if (partitionNameSet.contains(field.name))
+                        field.copy(nullable = false)
+                    else
+                        field
+                }
+            }
+
+        val partitionNames: Seq[String] =
+            if (provider.exists(_.equalsIgnoreCase("delta")))
+                Seq.empty
+            else if (partitionIdx >= 0 && detailIdx > partitionIdx) {
+                rows.slice(partitionIdx + 1, detailIdx)
+                    .filter(r => r.col.nonEmpty && !r.col.startsWith("#") && r.col != "col_name")
+                    .map(_.col)
+            }
+            else {
+                Seq.empty
+            }
 
         val tableType = detail.get("Type") match {
             case Some("VIEW") => TableType.VIEW
@@ -557,10 +554,10 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
         TableDescription(
             tableType = tableType,
             external = detail.get("Type").contains("EXTERNAL"),
-            columns = allColumnsFixed,
+            columns = columns,
             partitionColumnNames = partitionNames,
             comment = detail.get("Comment").filter(_.nonEmpty),
-            provider = detail.get("Provider"),
+            provider = provider,
             location = detail.get("Location").filter(_.nonEmpty).map(loc => {
                     new Path(loc)
             }),
