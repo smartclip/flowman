@@ -36,13 +36,28 @@ object FlowmanMessages {
       * this version for the plugin features to be used. */
     val API_VERSION = "1"
 
-    /** The Flowman version as seen by the server side. Set at build time via the "flowman.version" manifest entry. */
-    val FLOWMAN_VERSION = "1.4.0-SNAPSHOT"
+    /** The Flowman version as seen by the server side. Filled in at build time from the Maven project version. */
+    val FLOWMAN_VERSION : String = {
+        val props = new java.util.Properties()
+        val stream = Option(
+            classOf[FlowmanMessage].getClassLoader.getResourceAsStream("com/dimajix/flowman/connect/flowman-connect.properties")
+        )
+        stream.foreach { in =>
+            try {
+                props.load(in)
+            }
+            finally {
+                in.close()
+            }
+        }
+        Option(props.getProperty("version")).filter(_.nonEmpty).getOrElse("unknown")
+    }
 
     private[proto] val TYPE_URL_PREFIX = "dimajix.flowman.connect.v1"
 
     private[proto] def typeUrl(name:String) : String = s"$TYPE_URL_PREFIX.$name"
     private[proto] def typeName(typeUrl:String) : String = typeUrl.substring(typeUrl.lastIndexOf('.') + 1)
+    def isFlowmanTypeUrl(typeUrl:String) : Boolean = typeUrl.startsWith(TYPE_URL_PREFIX + ".")
 }
 
 
@@ -178,30 +193,47 @@ object FlowmanConnectCodec {
 
         def hasRemaining : Boolean = pos < data.length
 
+        private def require(count:Long) : Unit = {
+            if (count < 0 || count > data.length - pos)
+                throw new IllegalArgumentException(
+                    s"Malformed Flowman message: field length $count exceeds remaining payload ${data.length - pos}"
+                )
+        }
+
         def readVarint() : Long = {
             var shift = 0
             var result = 0L
             while (shift < 64) {
+                if (pos >= data.length)
+                    throw new IllegalArgumentException("Malformed Flowman message: truncated varint")
                 val b = data(pos); pos += 1
                 result |= (b & 0x7FL).toLong << shift
                 if ((b & 0x80) == 0)
                     return result
                 shift += 7
             }
-            throw new IllegalArgumentException("Malformed varint")
+            throw new IllegalArgumentException("Malformed Flowman message: varint too long")
         }
         private def readTag() : (Int,Int) = {
             val tag = readVarint()
-            (tag >>> 3).toInt -> (tag & 0x7).toInt
+            val field = (tag >>> 3).toInt
+            if (field <= 0)
+                throw new IllegalArgumentException(s"Malformed Flowman message: invalid field number $field")
+            field -> (tag & 0x7).toInt
+        }
+        private def readLength() : Int = {
+            val length = readVarint()
+            require(length)
+            length.toInt
         }
         def readString() : String = {
-            val length = readVarint().toInt
+            val length = readLength()
             val str = new String(data, pos, length, StandardCharsets.UTF_8)
             pos += length
             str
         }
         def readBytes() : Array[Byte] = {
-            val length = readVarint().toInt
+            val length = readLength()
             val bytes = java.util.Arrays.copyOfRange(data, pos, pos + length)
             pos += length
             bytes
@@ -209,29 +241,37 @@ object FlowmanConnectCodec {
         def skipField(wire:Int) : Unit = {
             wire match {
                 case WIRE_VARINT => readVarint()
-                case WIRE_64BIT => pos += 8
-                case WIRE_LENGTH_DELIMITED => pos += readVarint().toInt
-                case WIRE_32BIT => pos += 4
+                case WIRE_64BIT =>
+                    require(8)
+                    pos += 8
+                case WIRE_LENGTH_DELIMITED =>
+                    val length = readLength()
+                    pos += length
+                case WIRE_32BIT =>
+                    require(4)
+                    pos += 4
                 case other => throw new IllegalArgumentException(s"Unknown wire type $other")
             }
         }
         def readTagAndSkipUnknown(known:Set[Int]) : Option[(Int,Int)] = {
-            if (!hasRemaining) None
-            else {
+            var result : Option[(Int,Int)] = None
+            var done = false
+            while (!done && hasRemaining) {
                 val (field, wire) = readTag()
-                if (known.contains(field))
-                    Some(field -> wire)
+                if (known.contains(field)) {
+                    result = Some(field -> wire)
+                    done = true
+                }
                 else {
                     skipField(wire)
-                    readTagAndSkipUnknown(known)
                 }
             }
+            result
         }
         def ensureFinished(field:Int) : Unit = {
             while (hasRemaining) {
-                val (f, wire) = readTag()
-                if (f != field)
-                    skipField(wire)
+                val (_, wire) = readTag()
+                skipField(wire)
             }
         }
     }

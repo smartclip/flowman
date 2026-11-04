@@ -52,19 +52,6 @@ class FlowmanConnectServerTest extends FlowmanConnectServerTestBase {
         ConnectServerPlugin.relationSupportsMultiplePaths(spark, "nonexistent-format") should be (Some(false))
     }
 
-    it should "handle file system operations" in {
-        val dir = new java.io.File(tempDir, "connect-server-fs")
-        val path = dir.toURI.toString
-
-        ConnectServerPlugin.fsOperation(spark, "mkdirs", path) should be (true)
-        new java.io.File(dir.getPath).isDirectory should be (true)
-
-        ConnectServerPlugin.fsOperation(spark, "delete", path) should be (true)
-        new java.io.File(dir.getPath).exists should be (false)
-
-        ConnectServerPlugin.fsOperation(spark, "bogus-operation", path) should be (false)
-    }
-
     it should "create a nullable_struct" in {
         val schema = StructType(Seq(
             StructField("a", IntegerType, nullable = true),

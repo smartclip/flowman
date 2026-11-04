@@ -42,11 +42,12 @@ class FlowmanExpressionPlugin extends ExpressionPlugin {
     private val logger = LoggerFactory.getLogger(classOf[FlowmanExpressionPlugin])
 
     override def transform(bytes:Array[Byte], planner:SparkConnectPlanner) : Optional[Expression] = {
-        val msg = FlowmanPluginPayloads.decode(bytes)
-        msg match {
-            case msg:FlowmanNullableStruct => Optional.of(nullableStruct(planner, msg))
-            case other =>
+        FlowmanPluginPayloads.decode(bytes) match {
+            case Some(msg:FlowmanNullableStruct) => Optional.of(nullableStruct(planner, msg))
+            case Some(other) =>
                 logger.debug(s"Ignoring non-Flowman expression extension: ${other.typeUrl}")
+                Optional.empty()
+            case None =>
                 Optional.empty()
         }
     }

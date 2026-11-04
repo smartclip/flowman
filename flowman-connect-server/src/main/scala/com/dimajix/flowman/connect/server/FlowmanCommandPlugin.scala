@@ -16,8 +16,6 @@
 
 package com.dimajix.flowman.connect.server
 
-import org.apache.hadoop.fs.FileSystem
-import org.apache.hadoop.fs.Path
 import org.apache.spark.sql.connect.planner.SparkConnectPlanner
 import org.apache.spark.sql.connect.plugin.CommandPlugin
 import org.slf4j.LoggerFactory
@@ -34,19 +32,23 @@ import com.dimajix.flowman.connect.proto.FlowmanPing
   *
   *  - [[FlowmanPing]]: version handshake. Always succeeds; the client uses it to detect the plugin and to log a
   *    warning when the protocol versions of client and server differ.
-  *  - [[FlowmanFsCommand]]: executes file system operations (currently "mkdirs" and "delete") on the server driver,
-  *    e.g. for platforms where the client has no direct access to the cluster storage.
+  *
+  * File system commands are deliberately not executed: any Connect client could otherwise delete arbitrary paths
+  * with the server's credentials. The corresponding message type is retained for protocol compatibility only.
   */
 class FlowmanCommandPlugin extends CommandPlugin {
     private val logger = LoggerFactory.getLogger(classOf[FlowmanCommandPlugin])
 
     override def process(bytes:Array[Byte], planner:SparkConnectPlanner) : Boolean = {
-        val msg = FlowmanPluginPayloads.decode(bytes)
-        msg match {
-            case msg:FlowmanPing => ping(msg)
-            case msg:FlowmanFsCommand => fsCommand(planner, msg)
-            case other =>
+        FlowmanPluginPayloads.decode(bytes) match {
+            case Some(msg:FlowmanPing) => ping(msg)
+            case Some(msg:FlowmanFsCommand) =>
+                logger.warn("Rejecting FlowmanFsCommand: server-side file system operations are disabled")
+                false
+            case Some(other) =>
                 logger.debug(s"Ignoring non-Flowman command extension: ${other.typeUrl}")
+                false
+            case None =>
                 false
         }
     }
@@ -58,22 +60,10 @@ class FlowmanCommandPlugin extends CommandPlugin {
                 s"Flowman Connect client uses protocol version ${msg.apiVersion}, but the server supports " +
                     s"${FlowmanMessages.API_VERSION}. Plugin features will be disabled on the client."
             )
-        }
-        true
-    }
-
-
-    private def fsCommand(planner:SparkConnectPlanner, msg:FlowmanFsCommand) : Boolean = {
-        val hadoopConf = planner.session.sessionState.newHadoopConf()
-        val path = new Path(msg.path)
-        val fs = path.getFileSystem(hadoopConf)
-        val success = msg.operation match {
-            case "mkdirs" => fs.mkdirs(path)
-            case "delete" => fs.delete(path, true)
-            case other => throw new IllegalArgumentException(s"Unsupported file system operation: $other")
-        }
-        if (!success) {
-            throw new java.io.IOException(s"File system operation '${msg.operation}' on '${msg.path}' reported failure")
+            // Fail the command so that the client-side ping reports an incompatible plugin
+            throw new IllegalArgumentException(
+                s"Incompatible Flowman Connect protocol version ${msg.apiVersion} (server: ${FlowmanMessages.API_VERSION})"
+            )
         }
         true
     }

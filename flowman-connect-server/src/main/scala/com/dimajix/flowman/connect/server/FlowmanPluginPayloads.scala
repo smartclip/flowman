@@ -20,6 +20,7 @@ import org.sparkproject.connect.protobuf.{Any => ProtoAny}
 
 import com.dimajix.flowman.connect.proto.FlowmanConnectCodec
 import com.dimajix.flowman.connect.proto.FlowmanMessage
+import com.dimajix.flowman.connect.proto.FlowmanMessages
 
 
 /**
@@ -28,9 +29,16 @@ import com.dimajix.flowman.connect.proto.FlowmanMessage
   * [[FlowmanMessage]] via the shared protocol codec.
   */
 private[server] object FlowmanPluginPayloads {
-    /** Parses the raw extension payload (a serialized `google.protobuf.Any`) into the boxed Flowman protocol message. */
-    def decode(bytes:Array[Byte]) : FlowmanMessage = {
+    /**
+      * Parses the raw extension payload (a serialized `google.protobuf.Any`) into the boxed Flowman protocol
+      * message. Returns `None` when the payload belongs to another Connect plugin (e.g. Delta Connect), so that
+      * the Flowman plugins do not interfere with other extensions registered in the same server.
+      */
+    def decode(bytes:Array[Byte]) : Option[FlowmanMessage] = {
         val any = ProtoAny.parseFrom(bytes)
-        FlowmanConnectCodec.decode(any.getTypeUrl, any.getValue.toByteArray)
+        if (FlowmanMessages.isFlowmanTypeUrl(any.getTypeUrl))
+            Some(FlowmanConnectCodec.decode(any.getTypeUrl, any.getValue.toByteArray))
+        else
+            None
     }
 }

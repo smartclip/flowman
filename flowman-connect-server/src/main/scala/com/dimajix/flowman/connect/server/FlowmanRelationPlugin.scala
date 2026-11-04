@@ -57,13 +57,14 @@ class FlowmanRelationPlugin extends RelationPlugin {
     private val logger = LoggerFactory.getLogger(classOf[FlowmanRelationPlugin])
 
     override def transform(bytes:Array[Byte], planner:SparkConnectPlanner) : Optional[LogicalPlan] = {
-        val msg = FlowmanPluginPayloads.decode(bytes)
-        msg match {
-            case msg:FlowmanCapabilities => Optional.of(features(planner, msg))
-            case msg:FlowmanDescribe => Optional.of(describe(planner, msg))
-            case msg:FlowmanCountRecords => Optional.of(countRecords(planner, msg))
-            case other =>
+        FlowmanPluginPayloads.decode(bytes) match {
+            case Some(msg:FlowmanCapabilities) => Optional.of(features(planner, msg))
+            case Some(msg:FlowmanDescribe) => Optional.of(describe(planner, msg))
+            case Some(msg:FlowmanCountRecords) => Optional.of(countRecords(planner, msg))
+            case Some(other) =>
                 logger.debug(s"Ignoring non-Flowman relation extension: ${other.typeUrl}")
+                Optional.empty()
+            case None =>
                 Optional.empty()
         }
     }
