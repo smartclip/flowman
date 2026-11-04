@@ -93,6 +93,12 @@ object FieldType {
             case org.apache.spark.sql.types.ArrayType(dt, n) => ArrayType(FieldType.of(dt), n)
             case org.apache.spark.sql.types.StructType(fields) => StructType(fields.map(Field.of))
             case org.apache.spark.sql.types.MapType(k,v,n) => MapType(FieldType.of(k), FieldType.of(v), n)
+            // Spark 3.4+ type, but referring to the class directly would break builds against older Spark versions
+            case dt if dt.getClass.getSimpleName == "TimestampNTZType" => TimestampType
+            case dt:org.apache.spark.sql.types.UserDefinedType[_] => FieldType.of(dt.sqlType)
+            // Last resort for types Flowman does not model (e.g. VariantType). Mapping them to string keeps
+            // schema-based operations (such as getTable) working instead of failing with a MatchError.
+            case _ => StringType
         }
     }
 

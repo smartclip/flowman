@@ -66,7 +66,15 @@ object DataFrameBuilder {
      * @return
      */
     def ofRows(sparkSession: SparkSession, rows:Seq[Row], schema:StructType): DataFrame = {
-        sparkSession.createDataFrame(rows.asJava, schema)
+        if (schema.isEmpty) {
+            // SparkSession.createDataFrame(rdd, empty schema) silently ignores the row payload, whereas the
+            // Seq-based overload converts through LocalRelation.fromExternalRows and throws an
+            // ArrayIndexOutOfBoundsException for rows with more fields. Reproduce the RDD behavior here.
+            sparkSession.createDataFrame(rows.map(_ => Row.empty).asJava, schema)
+        }
+        else {
+            sparkSession.createDataFrame(rows.asJava, schema)
+        }
     }
 
     /**
@@ -90,7 +98,7 @@ object DataFrameBuilder {
      * @return
      */
     def singleRow(sparkSession: SparkSession, schema: StructType): DataFrame = {
-        if (sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession") {
+        if (SparkSessionUtils.isConnect(sparkSession)) {
             // Build a single Row with NULL values or default values. The classic path constructs a logical plan
             // which is not supported in Spark Connect, therefore a plain createDataFrame is used instead.
             val values = schema.fields.map { field =>
