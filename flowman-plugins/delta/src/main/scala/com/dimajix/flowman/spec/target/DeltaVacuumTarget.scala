@@ -46,7 +46,6 @@ import com.dimajix.flowman.model.Target
 import com.dimajix.flowman.spec.annotation.TargetType
 import com.dimajix.flowman.spec.relation.DeltaFileRelation
 import com.dimajix.flowman.spec.relation.DeltaTableRelation
-import com.dimajix.flowman.spec.relation.DeltaUtils
 import com.dimajix.flowman.spec.relation.RelationReferenceSpec
 import com.dimajix.flowman.types.SingleValue
 
@@ -184,54 +183,18 @@ case class DeltaVacuumTarget(
 
     /**
       * Compacts a Delta table in Connect mode. DeltaLog (which is used in classic mode to count files and to group
-      * them by partition) is not reachable from a Connect client, so the file counts and partition columns come from
-      * the `DESCRIBE DETAIL` SQL command that runs on the server, and the per-partition file grouping is approximated
-      * by grouping rows.
+      * them by partition) is not reachable from a Connect client, so the number of files is taken from the
+      * `DESCRIBE DETAIL` SQL command that runs on the server. Per-partition file counts are not exposed by
+      * `DESCRIBE DETAIL`; when the table contains too many files the whole table is rewritten (a partitioned
+      * overwrite only touches the partitions present in the DataFrame).
       */
     private def compactConnect(execution: Execution) : Unit = {
         val row = execution.spark.sql(s"DESCRIBE DETAIL $sqlIdentifier").head()
-        val partitionColumns = row.getSeq[String](row.schema.fieldIndex("partitionColumns")).toSeq
-        if (partitionColumns.nonEmpty) {
-            val compactionPartitionList = sourceDf(execution)
-                .groupBy(partitionColumns.map(c => col(c)): _*)
-                .agg(
-                    functions.count("*").as("count"),
-                    functions.max("modificationTime").as("modificationTime")
-                )
-                .where(col("count") > maxFiles)
-                .select(partitionColumns.map(col): _*)
-                .sort(partitionColumns.map(col): _*)
-                .collect
-
-            ThreadUtils.parmap(compactionPartitionList, "delta-vacuum-", 8) { partition =>
-                val partitionFilterSql = partition.toSeq.zip(partitionColumns)
-                    .map { case (v, k) => s"${DeltaUtils.quoteIdentifier(k)} = ${fieldValue(v)}" }
-                    .mkString(" AND ")
-                val partitionString = partition.toSeq.zip(partitionColumns).map(kv => kv._2 + "=" + kv._1.toString).mkString(",")
-                logger.info(s"Compacting Delta relation '${relation.identifier}' for partition ${partitionString}")
-                val df = sourceDf(execution)
-                    .where(partitionFilterSql)
-                    .repartition(minFiles)
-                writeTable(df, Some(partitionFilterSql))
-            }
-        }
-        else {
-            val fileCount = row.getAs[Long]("numFiles")
-            if (fileCount > maxFiles) {
-                logger.info(s"Compacting Delta relation '${relation.identifier}'")
-                val df = sourceDf(execution).repartition(minFiles)
-                writeTable(df, None)
-            }
-        }
-    }
-
-    private def fieldValue(value:Any) : String = {
-        value match {
-            case null => "null"
-            case s:String => "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
-            case _:java.sql.Timestamp | _:java.sql.Date => "'" + value.toString + "'"
-            case _:Number => value.toString
-            case _ => "'" + value.toString + "'"
+        val fileCount = row.getAs[Long]("numFiles")
+        if (fileCount > maxFiles) {
+            logger.info(s"Compacting Delta relation '${relation.identifier}'")
+            val df = sourceDf(execution).repartition(minFiles)
+            writeTable(df, None)
         }
     }
 

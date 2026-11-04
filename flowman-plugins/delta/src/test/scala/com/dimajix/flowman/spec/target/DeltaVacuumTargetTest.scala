@@ -34,6 +34,7 @@ import com.dimajix.flowman.catalog.TableIdentifier
 import com.dimajix.flowman.execution.Operation
 import com.dimajix.flowman.execution.Phase
 import com.dimajix.flowman.execution.Session
+import com.dimajix.flowman.execution.Status
 import com.dimajix.flowman.model.PartitionField
 import com.dimajix.flowman.model.Prototype
 import com.dimajix.flowman.model.Relation
@@ -151,7 +152,7 @@ class DeltaVacuumTargetTest extends AnyFlatSpec with Matchers with LocalSparkSes
 
         // == Vacuum ==================================================================================================
         target.dirty(execution, Phase.BUILD) should be (Unknown)
-        target.execute(execution, Phase.BUILD)
+        target.execute(execution, Phase.BUILD).status should be (Status.SUCCESS)
 
         // == Destroy =================================================================================================
         relation.destroy(execution)
@@ -210,7 +211,7 @@ class DeltaVacuumTargetTest extends AnyFlatSpec with Matchers with LocalSparkSes
 
         // == Vacuum ==================================================================================================
         target.dirty(execution, Phase.BUILD) should be (Unknown)
-        target.execute(execution, Phase.BUILD)
+        target.execute(execution, Phase.BUILD).status should be (Status.SUCCESS)
 
         // == Destroy =================================================================================================
         relation.destroy(execution)
@@ -267,7 +268,7 @@ class DeltaVacuumTargetTest extends AnyFlatSpec with Matchers with LocalSparkSes
 
         // == Vacuum ==================================================================================================
         target.dirty(execution, Phase.BUILD) should be (Unknown)
-        target.execute(execution, Phase.BUILD)
+        target.execute(execution, Phase.BUILD).status should be (Status.SUCCESS)
 
         // == Destroy =================================================================================================
         relation.destroy(execution)
@@ -328,7 +329,7 @@ class DeltaVacuumTargetTest extends AnyFlatSpec with Matchers with LocalSparkSes
 
         // == Vacuum ==================================================================================================
         target.dirty(execution, Phase.BUILD) should be (Unknown)
-        target.execute(execution, Phase.BUILD)
+        target.execute(execution, Phase.BUILD).status should be (Status.SUCCESS)
 
         // == Destroy =================================================================================================
         relation.destroy(execution)
