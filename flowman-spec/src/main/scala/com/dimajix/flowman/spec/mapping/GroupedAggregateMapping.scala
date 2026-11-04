@@ -28,6 +28,7 @@ import com.dimajix.flowman.model.BaseMapping
 import com.dimajix.flowman.model.Mapping
 import com.dimajix.flowman.model.MappingOutputIdentifier
 import com.dimajix.flowman.spec.mapping.GroupedAggregateMappingSpec.GroupSpec
+import com.dimajix.spark.sql.SparkSessionUtils
 import com.dimajix.spark.sql.DataFrameBuilder
 import com.dimajix.spark.sql.DataFrameUtils
 
@@ -252,7 +253,7 @@ final case class GroupedAggregateMapping(
     }
 
     private def isConnect(input:DataFrame) : Boolean = {
-        input.sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession"
+        SparkSessionUtils.isConnect(input.sparkSession)
     }
 
     private def quoteIdentifier(name:String) : String = {
@@ -276,9 +277,8 @@ final case class GroupedAggregateMapping(
             " FROM " + quoteIdentifier(inputName) +
             " GROUP BY GROUPING SETS (" + groupingSetSql + ")"
 
-        // Spark Connect analyzes queries lazily, so materialize the result while the temporary view is still available
         DataFrameUtils.withTempView(inputName, input) {
-            input.sparkSession.sql(sql).localCheckpoint(false)
+            input.sparkSession.sql(sql)
         }
     }
 

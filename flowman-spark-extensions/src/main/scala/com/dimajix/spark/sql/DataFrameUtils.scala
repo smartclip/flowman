@@ -118,13 +118,13 @@ object DataFrameUtils {
             }
             finally {
                 // Call SessionCatalog.dropTempView to avoid unpersisting the possibly cached dataset.
-                // In Spark Connect, SessionCatalog access is not available on the client, so the public
-                // catalog API is used instead (which may unpersist a cached dataset, unlike the classic path).
+                // In Spark Connect, SQL statements are analyzed lazily when the resulting DataFrame is first
+                // consumed, which usually happens after this block has returned. Dropping the temporary views
+                // here would make that analysis fail, so in Connect mode the views are kept registered; a
+                // subsequent createOrReplaceTempView with the same name replaces them.
                 input.foreach { kv =>
                     val session = kv._2.sparkSession
-                    if (session.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
-                        session.catalog.dropTempView(kv._1)
-                    else
+                    if (!SparkSessionUtils.isConnect(session))
                         session.sessionState.catalog.dropTempView(kv._1)
                 }
             }

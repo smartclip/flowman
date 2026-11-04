@@ -53,16 +53,7 @@ extends BaseMapping {
         require(input != null)
 
         val result = DataFrameUtils.withTempViews(rawDependencies.map(d => d -> input(MappingOutputIdentifier(d)))) {
-            // In Spark Connect the SQL statement is only analyzed when the resulting DataFrame is first
-            // consumed, which typically happens outside of the withTempViews block - i.e. after the temp
-            // views have been dropped again. A localCheckpoint materializes the query (and thus performs the
-            // analysis) while the temp views are still registered. The returned DataFrame is then
-            // self-contained and does not depend on the temp views anymore. The classic backend analyzes the
-            // query eagerly, so the original lazy DataFrame is preserved.
-            if (execution.backend.isConnect)
-                execution.spark.sql(statement).localCheckpoint(false)
-            else
-                execution.spark.sql(statement)
+            execution.spark.sql(statement)
         }
 
         Map("main" -> result)
