@@ -57,17 +57,18 @@ private final class LazyEvaluatedPartitions(
 
     override def get(key:String) : Option[FieldValue] = partitions.get(key).map(evaluate)
 
+    override def +[V1 >: FieldValue](kv: (String, V1)) : Map[String, V1] =
+        iterator.toMap + kv
+
+    override def -(key: String) : Map[String, FieldValue] =
+        iterator.toMap - key
+
     override def iterator : Iterator[(String,FieldValue)] = partitions.iterator.map {
         case (key, value) => key -> evaluate(value)
     }
 
-    override def removed(key:String) : Map[String,FieldValue] =
-        new LazyEvaluatedPartitions(partitions.removed(key), context)
-
     override def updated[V1 >: FieldValue](key:String, value:V1) : Map[String,V1] =
         iterator.toMap.updated(key, value)
-
-    override def knownSize : Int = partitions.knownSize
 
     override def size : Int = partitions.size
 

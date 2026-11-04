@@ -399,6 +399,12 @@ object SparkShim {
     def expr(col: Column): Expression = normalizeExpression(col.expr)
     def column(expression: Expression): Column = ColumnHelper(expression)
 
+    // Spark Connect job tags and artifacts
+    def addTag(spark:SparkSession, tag:String) : Unit = spark.addTag(tag)
+    def removeTag(spark:SparkSession, tag:String) : Unit = spark.removeTag(tag)
+    def interruptAll(spark:SparkSession) : Unit = spark.interruptAll()
+    def addArtifact(spark:SparkSession, path:String) : Unit = spark.addArtifact(path)
+
     val LocalTempView : ViewType = org.apache.spark.sql.catalyst.analysis.LocalTempView
     val GlobalTempView : ViewType = org.apache.spark.sql.catalyst.analysis.GlobalTempView
     val PersistedView : ViewType = org.apache.spark.sql.catalyst.analysis.PersistedView

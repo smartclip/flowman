@@ -461,7 +461,7 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             val values = row.split("/").map { kv =>
                 val idx = kv.indexOf('=')
                 val key = if (idx >= 0) kv.substring(0, idx) else kv
-                val value = if (idx >= 0) org.apache.spark.sql.catalyst.catalog.ExternalCatalogUtils.unescapePathName(kv.substring(idx + 1)) else ""
+                val value: Any = if (idx >= 0) org.apache.spark.sql.catalyst.catalog.ExternalCatalogUtils.unescapePathName(kv.substring(idx + 1)) else ""
                 key -> value
             }.toMap
             PartitionSpec(MapIgnoreCase(values))

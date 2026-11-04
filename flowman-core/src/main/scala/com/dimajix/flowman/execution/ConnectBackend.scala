@@ -67,15 +67,15 @@ private[execution] final class ConnectBackend(
     override def setJobGroup(jobGroupId: String, jobDescription: String) : Unit = {
         val (prevGroup, _) = getJobGroup
         if (prevGroup != null && prevGroup.nonEmpty && prevGroup != jobGroupId)
-            spark.removeTag(prevGroup)
+            SparkShim.removeTag(spark, prevGroup)
         jobGroups.set((jobGroupId, jobDescription))
         if (jobGroupId != null && jobGroupId.nonEmpty)
-            spark.addTag(jobGroupId)
+            SparkShim.addTag(spark, jobGroupId)
     }
 
     override def getJobGroup : (String,String) = jobGroups.get
 
-    override def cancelAllJobs() : Unit = spark.interruptAll()
+    override def cancelAllJobs() : Unit = SparkShim.interruptAll(spark)
 
     override def withJobGroup[T](jobGroupId:String, jobDescription:String)(fn: => T) : T = {
         val (prevGroup, prevDescription) = getJobGroup
@@ -89,7 +89,7 @@ private[execution] final class ConnectBackend(
             else {
                 jobGroups.set(("", ""))
                 if (jobGroupId != null)
-                    spark.removeTag(jobGroupId)
+                    SparkShim.removeTag(spark, jobGroupId)
             }
         }
     }
@@ -128,7 +128,7 @@ private[execution] final class ConnectBackend(
 
     override def setCheckpointDir(dir : String) : Unit = spark.conf.set("spark.checkpoint.dir", dir)
 
-    override def addJar(jar:String) : Unit = spark.addArtifact(jar)
+    override def addJar(jar:String) : Unit = SparkShim.addArtifact(spark, jar)
 
     override def relationSupportsMultiplePaths(format:String) : Boolean = {
         // Spark Connect clients cannot resolve the providing class of a format on the client side. When the Flowman

@@ -328,6 +328,12 @@ object SparkShim {
             .asInstanceOf[LogicalPlan]
     }
 
+    // Spark Connect job tags and artifacts are only available on Spark 4.x; these are no-ops for older versions
+    def addTag(spark:SparkSession, tag:String) : Unit = ()
+    def removeTag(spark:SparkSession, tag:String) : Unit = ()
+    def interruptAll(spark:SparkSession) : Unit = ()
+    def addArtifact(spark:SparkSession, path:String) : Unit = ()
+
     val LocalTempView : ViewType = org.apache.spark.sql.catalyst.analysis.LocalTempView
     val GlobalTempView : ViewType = org.apache.spark.sql.catalyst.analysis.GlobalTempView
     val PersistedView : ViewType = org.apache.spark.sql.catalyst.analysis.PersistedView
