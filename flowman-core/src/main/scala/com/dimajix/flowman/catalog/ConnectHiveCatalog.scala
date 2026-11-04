@@ -26,9 +26,12 @@ import org.apache.spark.sql.catalyst.analysis.NoSuchTableException
 import org.apache.spark.sql.catalyst.analysis.TableAlreadyExistsException
 import org.slf4j.LoggerFactory
 
+import scala.util.control.NonFatal
+
 import com.dimajix.common.MapIgnoreCase
 import com.dimajix.common.SetIgnoreCase
 import com.dimajix.flowman.config.Configuration
+import com.dimajix.flowman.fs.HadoopUtils
 import com.dimajix.flowman.model.PartitionField
 import com.dimajix.flowman.model.PartitionSchema
 import com.dimajix.flowman.types.DateType
@@ -48,6 +51,12 @@ import com.dimajix.flowman.types.TimestampType
   */
 final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration) extends Catalog {
     private val logger = LoggerFactory.getLogger(classOf[ConnectHiveCatalog])
+
+    private val hadoopConf = {
+        val sparkConf = new org.apache.spark.SparkConf(false)
+        spark.conf.getAll.foreach { case (key, value) => sparkConf.set(key, value) }
+        org.apache.spark.sql.SparkShim.getHadoopConf(sparkConf)
+    }
 
     private case class DescribeRow(col: String, dataType: String, comment: String)
 
@@ -251,12 +260,24 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             if (tableDefinition.tableType == TableType.VIEW)
                 throw new NoSuchTableException(table.database.getOrElse(""), table.table)
 
-            // Do not delete the table location from the client side: the data lives on the server's file system,
-            // which may not be reachable from the client (or a client-local "file:" path would delete the wrong
-            // files). Managed tables are cleaned up by the server as part of DROP TABLE; the data of external
-            // tables is intentionally retained (as with plain Spark/Hive).
+            // Drop the table itself. Managed tables are cleaned up by the server as part of DROP TABLE.
             val ifExists = if (ignoreIfNotExists) "IF EXISTS " else ""
             spark.sql(s"DROP TABLE $ifExists${table.quotedString}")
+
+            // Delete the location to clean up any remaining files (Spark will not delete the data of an
+            // EXTERNAL table on DROP). This runs on the client; if the client cannot access the server's file
+            // system (remote setup), the data is left behind and a warning is logged.
+            tableDefinition.location.foreach { location =>
+                try {
+                    val fs = location.getFileSystem(hadoopConf)
+                    if (fs.exists(location))
+                        HadoopUtils.deleteLocation(fs, location)
+                }
+                catch {
+                    case NonFatal(ex) =>
+                        logger.warn(s"Could not delete location $location of table $table from the client: ${ex.getMessage}")
+                }
+            }
         }
         else if (!ignoreIfNotExists) {
             throw new NoSuchTableException(table.database.getOrElse(""), table.table)

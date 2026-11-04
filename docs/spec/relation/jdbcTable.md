@@ -126,7 +126,9 @@ as the fallback for merge/upsert operations, when no `mergeKey` and no explicit 
    Specifies the name of an optional staging table in the relational database. This table will be used as a
 temporary, intermediate target for write/update/merge operations. During output operations this table will be
 created first, then populated with new records and then within a database transaction all records will be pushed into
-the real JDBC table and the temporary table will be dropped.
+the real JDBC table and the temporary table will be dropped. The database user therefore needs `CREATE` and `DROP`
+rights in the target schema. Since the staging table is populated with a set-based write, duplicate merge keys in the
+input are deduplicated (last occurrence wins) before the merge is executed.
 
  * `properties` **(optional)** *(type: map:string)* *(default: empty)*:
  Specifies any additional properties passed to the JDBC connection.  Note that both the JDBC

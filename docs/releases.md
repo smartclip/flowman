@@ -30,6 +30,15 @@ Breaking changes will be documented in the changelog file for each version.
 The following gives an (incomplete) list of past releases of the last 12 months. This will help you to spot breaking 
 changes over time.
 
+### Version 1.4.0 (upcoming)
+
+* Spark Connect support (client mode).
+* Breaking change: `Catalog.getTable` (and related catalog methods) now return Flowman's `TableDefinition` instead of
+  a Spark `CatalogTable`. Third-party `Catalog` implementations must be adapted. Note that a reconstructed
+  `CatalogTable` is no longer available, so `owner`, statistics and bucketing information are not exposed anymore.
+* New configuration option `flowman.spark.connect.countRecords` to disable the additional record-counting pass in
+  Spark Connect mode.
+
 ### Version 1.3.7
 
 * Upgrade Spark to 3.5.6

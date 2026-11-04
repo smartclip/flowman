@@ -401,12 +401,27 @@ abstract class JdbcTableRelationBase(
                 val options = new JDBCOptions(props)
                 JdbcUtils.mergeTable(tableIdentifier, "target", targetSchema, df, "source", condition, clauses, options)
             case Some(stagingTable) =>
+                // The classic row-by-row merge resolves duplicate merge keys last-wins, whereas a set-based
+                // MERGE fails on duplicate source keys (or updates a target row multiple times). Deduplicate
+                // the source by the merge key columns, keeping the last occurrence in DataFrame order.
+                val keyColumns = collectColumns(SparkShim.expr(condition), "source").toSeq
+                val stagingDf = if (keyColumns.nonEmpty) {
+                    val window = org.apache.spark.sql.expressions.Window
+                        .partitionBy(keyColumns.map(col): _*)
+                        .orderBy(org.apache.spark.sql.functions.monotonically_increasing_id().desc)
+                    df.withColumn("_flowman_merge_row", org.apache.spark.sql.functions.row_number().over(window))
+                        .where(col("_flowman_merge_row") === 1)
+                        .drop("_flowman_merge_row")
+                }
+                else {
+                    df
+                }
                 withConnection { (con, options) =>
-                    withStagingTable(execution, con, options, df, stagingSchema) {
+                    withStagingTable(execution, con, options, stagingDf, stagingSchema) {
                         withTransaction(con) {
                             withStatement(con, options) { statement =>
                                 logger.info(s"Merging data from temporary staging table ${stagingTable} into table ${tableIdentifier}")
-                                JdbcUtils.mergeTable(statement, tableIdentifier, "target", targetSchema, stagingTable, "source", df.schema, condition, clauses, options)
+                                JdbcUtils.mergeTable(statement, tableIdentifier, "target", targetSchema, stagingTable, "source", stagingDf.schema, condition, clauses, options)
                             }
                         }
                     }
