@@ -30,6 +30,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # match file contents via a plain grep.
 PATTERNS='\.sparkContext|\.sessionState|\.queryExecution|\.rdd'
 
+# Counts the offending lines in a file, ignoring matches that only appear in comments
+count_matches() {
+    grep -nE "$PATTERNS" "$1" | grep -vE '^[0-9]+:[[:space:]]*(//|\*|/\*)' | wc -l | tr -d ' '
+}
+
 # Files known to still use the classic Spark API, with the expected number of
 # offending lines. Keep this list sorted.
 declare -A BACKLOG=(
@@ -73,7 +78,7 @@ for entry in "${!BACKLOG[@]}"; do
         STALE+=("$entry (file not found)")
         continue
     fi
-    actual=$(grep -cE "$PATTERNS" "$file")
+    actual=$(count_matches "$file")
     if (( actual < expected )); then
         STALE+=("$entry (expected $expected, found $actual)")
     fi
@@ -81,8 +86,11 @@ done
 
 # Find offending files under any module's src/main
 mapfile -t OFFENDERS < <(
-    find "$ROOT" -path '*/src/main/*' -name '*.scala' \
-        -exec grep -lE "$PATTERNS" {} \;
+    find "$ROOT" -path '*/src/main/*' -name '*.scala' | while read -r file; do
+        if [[ $(count_matches "$file") -gt 0 ]]; then
+            echo "$file"
+        fi
+    done
 )
 
 declare -a NEW_USAGE=()
@@ -110,7 +118,7 @@ for file in "${OFFENDERS[@]}"; do
     # Check the documented backlog (including its line-count baseline)
     if [[ -v "BACKLOG[$rel]" ]]; then
         expected="${BACKLOG[$rel]}"
-        actual=$(grep -cE "$PATTERNS" "$file")
+        actual=$(count_matches "$file")
         if (( actual > expected )); then
             NEW_USAGE+=("$rel (expected at most $expected classic API lines, found $actual)")
         fi

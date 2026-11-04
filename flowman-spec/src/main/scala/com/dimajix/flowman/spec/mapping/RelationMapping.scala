@@ -48,7 +48,8 @@ import com.dimajix.spark.sql.SchemaUtils
 private final class LazyEvaluatedPartitions(
     partitions:Map[String,FieldValue],
     context:Context
-) extends scala.collection.immutable.AbstractMap[String,FieldValue] {
+) extends scala.collection.immutable.AbstractMap[String,FieldValue]
+    with com.dimajix.common.MapCompatibility[String,FieldValue] {
     private def evaluate(value:FieldValue) : FieldValue = value match {
         case v: SingleValue => SingleValue(context.evaluate(v.value))
         case v: ArrayValue => ArrayValue(v.values.map(context.evaluate))
@@ -59,9 +60,6 @@ private final class LazyEvaluatedPartitions(
 
     override def +[V1 >: FieldValue](kv: (String, V1)) : Map[String, V1] =
         iterator.toMap + kv
-
-    override def -(key: String) : Map[String, FieldValue] =
-        iterator.toMap - key
 
     override def iterator : Iterator[(String,FieldValue)] = partitions.iterator.map {
         case (key, value) => key -> evaluate(value)
