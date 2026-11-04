@@ -36,7 +36,6 @@ import org.sparkproject.connect.protobuf.ByteString
 import com.dimajix.flowman.connect.proto.FlowmanCapabilities
 import com.dimajix.flowman.connect.proto.FlowmanCountRecords
 import com.dimajix.flowman.connect.proto.FlowmanDescribe
-import com.dimajix.flowman.connect.proto.FlowmanFsCommand
 import com.dimajix.flowman.connect.proto.FlowmanMessage
 import com.dimajix.flowman.connect.proto.FlowmanMessages
 import com.dimajix.flowman.connect.proto.FlowmanNullableStruct
@@ -53,7 +52,6 @@ import com.dimajix.flowman.types.StructType
   *   - server-side row counting during plan execution ([[FlowmanCountRecords]])
   *   - the `nullable_struct` expression incl. metadata propagation ([[FlowmanNullableStruct]])
   *   - data source capability probes (multi-path support, via [[FlowmanCapabilities]])
-  *   - server-side file system operations ([[FlowmanFsCommand]])
   *
   * All operations degrade gracefully: when the server plugin is not installed (or is not version compatible), the
   * callers fall back to the public client API variants. The detected capabilities are cached per [[SparkSession]]
@@ -253,29 +251,6 @@ object ConnectServerPlugin {
         }
         catch {
             case NonFatal(_) => false
-        }
-    }
-
-    /**
-      * Runs a file system operation on the server side. Returns true when the server plugin handled the command.
-      */
-    def fsOperation(spark:SparkSession, operation:String, path:String) : Boolean = {
-        try {
-            val connectSession = ConnectConversions.castToImpl(spark)
-            val msg = FlowmanFsCommand(operation, path)
-            val command = proto.Command.newBuilder()
-                .setExtension(packAny(msg))
-                .build()
-            val plan = proto.Plan.newBuilder()
-                .setCommand(command)
-                .build()
-            ConnectClientBridge.execute(connectSession, plan)
-            true
-        }
-        catch {
-            case NonFatal(ex) =>
-                logger.info(s"Server-side file system operation '$operation' on '$path' failed: ${ex.getMessage}")
-                false
         }
     }
 

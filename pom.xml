@@ -91,6 +91,9 @@
         <spark.version>4.1.0</spark.version>
         <spark-api.version>4.1</spark-api.version>
         <spark-source.version>4.0</spark-source.version>
+        <!-- Source directory with the Flowman Connect server plugin gateway. It uses Spark Connect client
+             internals which are only available in Spark 4.x, so Spark 3.x builds use a no-op stub instead. -->
+        <flowman.spark.connect.sources>src/main/spark-legacy</flowman.spark.connect.sources>
 
         <!-- API mode ("classic" or "connect") used by the local test fixture. The "-Pspark-connect" profile
              switches this to "connect" so that the whole test suite runs against an in-process Spark Connect
@@ -1062,6 +1065,9 @@
         </profile>
         <profile>
             <id>spark-4.0</id>
+            <modules>
+                <module>flowman-connect-server</module>
+            </modules>
             <properties>
                 <java.version>17</java.version>
                 <scala.version>2.13.15</scala.version>
@@ -1069,6 +1075,7 @@
                 <spark.version>4.0.1</spark.version>
                 <spark-api.version>4.0</spark-api.version>
                 <spark-source.version>4.0</spark-source.version>
+                <flowman.spark.connect.sources>src/main/spark-connect</flowman.spark.connect.sources>
                 <hive.version>2.3.9</hive.version>
                 <hive-storage-api.version>2.8.1</hive-storage-api.version>
                 <kafka.version>3.4.1</kafka.version>
@@ -1142,6 +1149,9 @@
         </profile>
         <profile>
             <id>spark-4.1</id>
+            <modules>
+                <module>flowman-connect-server</module>
+            </modules>
             <activation>
                 <activeByDefault>true</activeByDefault>
             </activation>
@@ -1154,6 +1164,7 @@
                 <spark.version>4.1.0</spark.version>
                 <spark-api.version>4.1</spark-api.version>
                 <spark-source.version>4.0</spark-source.version>
+                <flowman.spark.connect.sources>src/main/spark-connect</flowman.spark.connect.sources>
                 <hive.version>2.3.9</hive.version>
                 <hive-storage-api.version>2.8.1</hive-storage-api.version>
                 <kafka.version>3.9.1</kafka.version>
@@ -1229,6 +1240,9 @@
         </profile>
         <profile>
             <id>spark-connect</id>
+            <modules>
+                <module>flowman-connect-server</module>
+            </modules>
             <!-- Spark Connect profile. Selects the same dependency set as "spark-4.1" (which is active by default
                  and therefore cannot be used together with "-Pspark-connect"), but runs the whole test suite in
                  Spark Connect mode by setting the "spark.api.mode" system property to "connect". The local test
@@ -1244,6 +1258,7 @@
                 <spark.version>4.1.0</spark.version>
                 <spark-api.version>4.1</spark-api.version>
                 <spark-source.version>4.0</spark-source.version>
+                <flowman.spark.connect.sources>src/main/spark-connect</flowman.spark.connect.sources>
                 <hive.version>2.3.9</hive.version>
                 <hive-storage-api.version>2.8.1</hive-storage-api.version>
                 <kafka.version>3.9.1</kafka.version>
@@ -1319,6 +1334,9 @@
         </profile>
         <profile>
             <id>spark-4.2</id>
+            <modules>
+                <module>flowman-connect-server</module>
+            </modules>
             <properties>
                 <java.version>17</java.version>
                 <hadoop.version>3.5.0</hadoop.version>
@@ -1328,6 +1346,7 @@
                 <spark.version>4.2.0-preview5</spark.version>
                 <spark-api.version>4.2</spark-api.version>
                 <spark-source.version>4.0</spark-source.version>
+                <flowman.spark.connect.sources>src/main/spark-connect</flowman.spark.connect.sources>
                 <flowman.plugin.delta># flowman-delta is unavailable for Spark 4.2-preview5</flowman.plugin.delta>
                 <hive.version>2.3.9</hive.version>
                 <hive-storage-api.version>2.8.1</hive-storage-api.version>
@@ -1438,7 +1457,6 @@
         <module>flowman-common</module>
         <module>flowman-common-jersey</module>
         <module>flowman-core</module>
-        <module>flowman-connect-server</module>
         <module>flowman-spec</module>
         <module>flowman-plugins/parent</module>
         <module>flowman-plugins/avro</module>
