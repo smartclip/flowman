@@ -58,6 +58,8 @@ final class MonitorExecution(parent:Execution, override val listeners:Seq[(Execu
      */
     override def spark: SparkSession = parent.spark
 
+    override def backend: SparkBackend = parent.backend
+
     /**
      * Returns the FlowmanConf object, which contains all Flowman settings.
      *

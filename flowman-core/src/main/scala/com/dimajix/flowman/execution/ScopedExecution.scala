@@ -69,6 +69,8 @@ final class ScopedExecution(parent:Execution, isolated:Boolean=true) extends Cac
      */
     override def spark: SparkSession = parent.spark
 
+    override def backend: SparkBackend = parent.backend
+
     /**
      * Returns the table catalog used for managing table instances
      * @return

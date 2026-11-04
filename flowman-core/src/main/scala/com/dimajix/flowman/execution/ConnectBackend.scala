@@ -25,6 +25,7 @@ import org.apache.spark.sql.SparkShim
 import org.slf4j.LoggerFactory
 
 import com.dimajix.flowman.config.Configuration
+import com.dimajix.flowman.config.FlowmanConf
 import com.dimajix.flowman.metric.MultiMetricBundle
 import com.dimajix.flowman.metric.SettableGaugeMetric
 
@@ -48,6 +49,8 @@ private[execution] final class ConnectBackend(
     }
     private val jobGroups = new JobGroups
     private val logger = LoggerFactory.getLogger(classOf[ConnectBackend])
+    private var countRecordsEnabled: Boolean = true
+    private var countRecordsWarningIssued: Boolean = false
 
     // Spark Connect clients cannot resolve the providing class of a format on the client side. These are the
     // built-in file formats based on FileFormat/FileDataSourceV2 which do support reading multiple paths at once.
@@ -103,9 +106,22 @@ private[execution] final class ConnectBackend(
         // the Connect client registers observations by the (content-derived) planId, and re-executing the same
         // plan a second time silently keeps the stale observation. We therefore count explicitly and accumulate
         // the result in a SettableGaugeMetric, mirroring the accumulating semantics of the classic LongAccumulator.
-        val metric = bundle.getOrCreateMetric(metricName, metricLabels, SettableGaugeMetric(metricName, metricLabels))
-        metric.value = metric.value + df.count()
-        df
+        // Note that this runs the pipeline an extra time (before the write) and therefore needs to be opted out.
+        if (!countRecordsEnabled) {
+            df
+        }
+        else {
+            if (!countRecordsWarningIssued) {
+                countRecordsWarningIssued = true
+                logger.warn(
+                    "Counting written records in Spark Connect mode requires an additional pass over the data. " +
+                        "Set 'flowman.spark.connect.countRecords=false' to disable it."
+                )
+            }
+            val metric = bundle.getOrCreateMetric(metricName, metricLabels, SettableGaugeMetric(metricName, metricLabels))
+            metric.value = metric.value + df.count()
+            df
+        }
     }
 
     override def checkpointDir : Option[String] = spark.conf.getOption("spark.checkpoint.dir")
@@ -132,6 +148,7 @@ private[execution] final class ConnectBackend(
     }
 
     override def registerExtension(config:Configuration) : Unit = {
+        countRecordsEnabled = config.flowmanConf.getConf(FlowmanConf.SPARK_CONNECT_COUNT_RECORDS)
         logger.info("Spark extensions and UDFs must be registered server-side in Spark Connect mode; skipping client-side registration")
     }
 }

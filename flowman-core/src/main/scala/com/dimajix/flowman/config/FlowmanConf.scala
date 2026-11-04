@@ -55,6 +55,11 @@ object FlowmanConf {
         .doc("Enables Hive support. WHen using newer Hadoop versions, you might want to disable it")
         .booleanConf
         .createWithDefault(features.hiveSupported)
+    val SPARK_CONNECT_COUNT_RECORDS = buildConf("flowman.spark.connect.countRecords")
+        .doc("Counts the records written by a target in Spark Connect mode. Counting requires an additional pass " +
+            "over the data and may report counts for writes which are later skipped or fail, so it can be disabled.")
+        .booleanConf
+        .createWithDefault(true)
     val HIVE_ANALYZE_TABLE = buildConf("flowman.hive.analyzeTable")
         .doc("Performs ANALYZE TABLE commands")
         .booleanConf

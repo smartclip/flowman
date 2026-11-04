@@ -73,6 +73,12 @@ final class RootExecution(val session:Session) extends CachingExecution(None, tr
     override def spark: SparkSession = session.spark
 
     /**
+     * Returns the Spark execution backend of the owning session. Reusing the session's backend keeps state which is
+     * bound to the backend instance (e.g. the Connect job group of the current thread) consistent.
+     */
+    override def backend: SparkBackend = session.backend
+
+    /**
      * Returns the FlowmanConf object, which contains all Flowman settings.
      * @return
      */
