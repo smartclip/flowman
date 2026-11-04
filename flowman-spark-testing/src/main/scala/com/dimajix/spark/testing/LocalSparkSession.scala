@@ -140,6 +140,10 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
                 }
             }
             builder.config("spark.hadoop.javax.jdo.option.ConnectionURL", s"jdbc:derby:;databaseName=$localMetastorePath;create=true")
+                .config("spark.hadoop.datanucleus.connectionPool", "None")
+                .config("spark.hadoop.datanucleus.connectionPoolingType", "None")
+                .config("spark.hadoop.datanucleus.connectionPoolingType.nontx", "None")
+                .config("spark.hadoop.datanucleus.retainValues", true)
                 .config("spark.hadoop.datanucleus.rdbms.datastoreAdapterClassName", "org.datanucleus.store.rdbms.adapter.DerbyAdapter")
                 .config("spark.hadoop.datanucleus.schema.autoCreateTables", true)
                 .config("spark.hadoop.datanucleus.schema.autoCreateAll", true)
@@ -150,7 +154,7 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
                 .config("spark.hadoop.hive.metastore.schema.verification.record.version", true)
                 .config("spark.hadoop.hive.metastore.schema.verification", false)
                 .config("spark.hadoop.hive.metastore.uris", "")
-                .config("spark.sql.hive.metastore.sharedPrefixes", "org.apache.derby")
+                .config("spark.sql.hive.metastore.sharedPrefixes", "nothing.here")
 
             // Either way, we get some warnings, depending on the Hive features being used
             val version = HiveVersionInfo.getShortVersion.split('.')
@@ -236,7 +240,14 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
         // metastore, warehouse, session time zone, executor sizing, ...) are already configured on
         // the server session above, so the client only needs the connection details. Static configs
         // like "spark.sql.warehouse.dir" cannot be changed from a Connect client and must not be
-        // set here.
+        // set here. In particular the test JVM sets "spark.sql.warehouse.dir" as a system property
+        // (scalatest-maven-plugin), which the Connect client builder otherwise auto-loads into its
+        // SparkConf and pushes to the server as a `config` RPC, failing with
+        // CANNOT_MODIFY_STATIC_CONFIG. The server already has the correct value, so the client
+        // simply must not carry the property.
+        val warehouseDirProperty = System.getProperty("spark.sql.warehouse.dir")
+        if (warehouseDirProperty != null)
+            System.clearProperty("spark.sql.warehouse.dir")
         val clientBuilder = SparkSession.builder()
             .config("spark.api.mode", "connect")
             // NOTE: The SparkSessionBuilder reads the remote connection string from
@@ -278,6 +289,34 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
             _sc = None
         }
        if (_serverSpark.nonEmpty) {
+            _serverSpark.foreach { spark =>
+                if (hiveSupported) {
+                    // The gRPC executor threads are shared JVM-wide across suites and keep their datanucleus
+                    // connections bound to the previous suite's embedded Derby database. Shut the Hive metastore
+                    // background thread-pools and the embedded Derby engine down so the next suite's connections
+                    // start fresh.
+                    HiveClientAccessor.withHiveState(spark) {
+                        try {
+                            val clazz = Class.forName("org.apache.hadoop.hive.metastore.ThreadPool")
+                            val method = clazz.getMethod("shutdown")
+                            method.invoke(clazz)
+                        }
+                        catch {
+                            case _:ClassNotFoundException =>
+                            case _:NoSuchMethodException =>
+                        }
+                        try {
+                            Class.forName("org.apache.derby.iapi.jdbc.AutoloadedDriver")
+                            java.sql.DriverManager.getConnection("jdbc:derby:;shutdown=true")
+                        }
+                        catch {
+                            case _:ClassNotFoundException =>
+                            case _:NoSuchMethodException =>
+                            case _:java.sql.SQLException =>
+                        }
+                    }
+                }
+            }
             org.apache.spark.sql.connect.service.SparkConnectService.stop()
             _serverSpark.foreach { spark =>
                 spark.stop()
