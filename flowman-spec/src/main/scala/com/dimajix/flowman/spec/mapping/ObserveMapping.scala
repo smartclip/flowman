@@ -25,6 +25,7 @@ import org.apache.spark.sql.execution.QueryExecution
 import org.apache.spark.sql.functions.expr
 import org.apache.spark.sql.util.QueryExecutionListener
 
+import com.dimajix.spark.sql.SparkSessionUtils
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.metric.ObservationMetric
@@ -67,7 +68,7 @@ final case class ObserveMapping(
         val df = input(this.input)
         val exprs = measures.toSeq.map { case (name, e) => expr(e).as(name) }
 
-        if (df.sparkSession.getClass.getName == "org.apache.spark.sql.connect.SparkSession") {
+        if (SparkSessionUtils.isConnect(df.sparkSession)) {
             // A Spark Connect client has no access to QueryExecution or QueryExecutionListener, so the observed
             // metrics have to be obtained from a client-side Observation directly. Each Observation resolves its
             // promise once the observed DataFrame is executed, and the resulting metrics are read lazily from it
@@ -78,7 +79,16 @@ final case class ObserveMapping(
                 acc.observe(observations(name), expr(e).as(name))
             }
             measures.keys.foreach { name =>
-                metrics.addMetric(ObservationMetric(name, labels, observations(name), name))
+                // Reuse an existing metric (and re-bind its Observation), so that repeated executions do not
+                // accumulate duplicate metrics in the metric system
+                val metric = metrics.findMetric(Selector(name, labels)).headOption
+                    .collect { case m: ObservationMetric => m }
+                    .getOrElse {
+                        val m = ObservationMetric(name, labels, observations(name), name)
+                        metrics.addMetric(m)
+                        m
+                    }
+                metric.setObservation(observations(name))
             }
 
             Map("main" -> observed)

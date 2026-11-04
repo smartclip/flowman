@@ -76,7 +76,7 @@ final case class ObservationMetric(
                 else
                     row.getValuesMap(row.schema.map(_.name))
             }.getOrElse(Map.empty[String, Any])
-            metrics.get(metricName).map(_.toString.toDouble).getOrElse(0.0)
+            metrics.get(metricName).flatMap(v => Try(v.toString.toDouble).toOption).getOrElse(0.0)
         }
     }
 }
