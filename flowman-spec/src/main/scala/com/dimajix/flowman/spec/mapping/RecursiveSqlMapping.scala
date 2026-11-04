@@ -26,16 +26,21 @@ import org.apache.commons.io.IOUtils
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
+import org.apache.spark.sql.catalyst.plans.logical.UnaryNode
+import org.apache.spark.sql.catalyst.plans.logical.Union
 
 import com.dimajix.flowman.execution.Context
 import com.dimajix.flowman.execution.Execution
 import com.dimajix.flowman.execution.ExecutionException
+import com.dimajix.flowman.execution.SparkBackend
 import com.dimajix.flowman.fs.File
 import com.dimajix.flowman.fs.FileUtils
 import com.dimajix.flowman.model.BaseMapping
 import com.dimajix.flowman.model.Mapping
 import com.dimajix.flowman.model.MappingOutputIdentifier
 import com.dimajix.flowman.types.StructType
+import com.dimajix.spark.sql.DataFrameBuilder
 import com.dimajix.spark.sql.DataFrameUtils.withTempView
 import com.dimajix.spark.sql.DataFrameUtils.withTempViews
 import com.dimajix.spark.sql.SqlParser
@@ -91,17 +96,35 @@ extends BaseMapping {
     }
 
     private def firstDf(spark:SparkSession, statement:String) : DataFrame = {
-        val idx = SqlParser.findTopLevelUnion(statement)
-        if (idx < 0)
-            throw new IllegalArgumentException(s"SQL provided in recursiveSql mapping '$identifier' is not supported. Please use a structure like  'SELECT starting_point UNION ALL recursion', where starting_point does not reference __this__.")
+        @tailrec
+        def findUnion(plan:LogicalPlan) : LogicalPlan = {
+            plan match {
+                case union:Union => union
+                case node:UnaryNode => findUnion(node.child)
+                case _ => throw new IllegalArgumentException(s"SQL provided in recursiveSql mapping '$identifier' is not supported. Please use a structure like  'SELECT starting_point UNION ALL recursion', where starting_point does not reference __this__.")
+            }
+        }
 
-        val firstChildSql = statement.substring(0, idx)
-        spark.sql(firstChildSql)
+        val plan = SqlParser.parsePlan(statement)
+        val union = findUnion(plan)
+        val firstChild = union.children.head
+        if (SparkBackend.of(spark).isConnect) {
+            // A Spark Connect client cannot build a DataFrame from a client-side logical plan. Instead the SQL
+            // text of the first UNION child is cut out (the Union tree is left-associative, so the first child
+            // of `A UNION B UNION C` is `A UNION B`) and sent to the server for parsing.
+            val idx = SqlParser.findTopLevelUnion(statement, last = true)
+            if (idx < 0)
+                throw new IllegalArgumentException(s"SQL provided in recursiveSql mapping '$identifier' is not supported. Please use a structure like  'SELECT starting_point UNION ALL recursion', where starting_point does not reference __this__.")
+            spark.sql(statement.substring(0, idx))
+        }
+        else {
+            DataFrameBuilder.ofRows(spark, firstChild)
+        }
     }
     private def nextDf(statement:String, prev:DataFrame) : DataFrame = {
         val spark = prev.sparkSession
         withTempView("__this__", prev) {
-            spark.sql(statement).localCheckpoint(false)
+            spark.sql(statement)
         }
     }
 
@@ -117,21 +140,20 @@ extends BaseMapping {
 
         val spark = execution.spark
 
-        // Create dummy data frames
+        // Create dummy data frames. Use DataFrameBuilder.singleRow to preserve nullability and metadata of the
+        // input schemas; the Connect variant of singleRow does not require a logical plan.
         val replacements = input.map { case (id,schema) =>
-            val sparkSchema = schema.sparkType
-            val columns = sparkSchema.fields.map { field =>
-                org.apache.spark.sql.functions.lit(null).cast(field.dataType).as(field.name)
-            }
-            id.name -> spark.range(1).select(columns:_*)
+            id.name -> DataFrameBuilder.singleRow(spark, schema.sparkType)
         }
 
-        val result = withTempViews(replacements) {
-            firstDf(spark, statement)
+        // The schema must be resolved while the temporary views are still registered, because Spark Connect
+        // analyzes the SQL lazily (the first access to `schema` triggers an ANALYZE RPC).
+        val schemas = withTempViews(replacements) {
+            val result = firstDf(spark, statement)
+            Map("main" -> StructType.of(result.schema))
         }
 
         // Apply documentation
-        val schemas = Map("main" -> StructType.of(result.schema))
         applyDocumentation(schemas)
     }
 

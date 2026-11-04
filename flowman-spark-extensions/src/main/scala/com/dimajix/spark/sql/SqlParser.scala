@@ -16,8 +16,6 @@
 
 package com.dimajix.spark.sql
 
-import java.util.Locale
-
 import org.apache.spark.sql.catalyst.analysis.UnresolvedRelation
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
@@ -92,16 +90,37 @@ object SqlParser {
       * a client side (and therefore Spark Connect compatible) alternative to parsing the SQL statement into a
       * [[LogicalPlan]] and looking for a [[org.apache.spark.sql.catalyst.plans.logical.Union]] node. Returns `-1` if no
       * such keyword is present.
+      *
+      * When `last` is true, the index of the last top level `UNION` keyword is returned instead. This corresponds
+      * to the boundary of the first child of the (left-associative) Union node of a statement like
+      * `A UNION B UNION C`, whose first child is `A UNION B`.
       */
-    def findTopLevelUnion(sql:String) : Int = {
+    def findTopLevelUnion(sql:String, last:Boolean=false) : Int = {
+        def isIdentifierChar(c:Char) : Boolean =
+            Character.isLetterOrDigit(c) || c == '_' || c == '$'
+
         var depth = 0
         var inSingleQuote = false
         var inDoubleQuote = false
         var inBacktick = false
+        var inLineComment = false
+        var inBlockComment = false
+        var lastIndex = -1
         var i = 0
         while (i < sql.length) {
             val c = sql.charAt(i)
-            if (inSingleQuote) {
+            if (inLineComment) {
+                if (c == '\n')
+                    inLineComment = false
+            }
+            else if (inBlockComment) {
+                if (c == '*' && i + 1 < sql.length && sql.charAt(i+1) == '/') {
+                    inBlockComment = false
+                    i += 1
+                }
+            }
+            else if (inSingleQuote) {
+                // Backslashes are literal characters with Spark's default escapedStringLiterals=false
                 if (c == '\'') {
                     if (i + 1 < sql.length && sql.charAt(i+1) == '\'')
                         i += 1
@@ -118,31 +137,43 @@ object SqlParser {
                 }
             }
             else if (inBacktick) {
-                if (c == '`')
-                    inBacktick = false
+                if (c == '`') {
+                    if (i + 1 < sql.length && sql.charAt(i+1) == '`')
+                        i += 1
+                    else
+                        inBacktick = false
+                }
             }
             else {
                 c match {
                     case '\'' => inSingleQuote = true
                     case '"' => inDoubleQuote = true
                     case '`' => inBacktick = true
+                    case '-' if i + 1 < sql.length && sql.charAt(i+1) == '-' =>
+                        inLineComment = true
+                        i += 1
+                    case '/' if i + 1 < sql.length && sql.charAt(i+1) == '*' =>
+                        inBlockComment = true
+                        i += 1
                     case '(' => depth += 1
                     case ')' => depth -= 1
                     case u if depth == 0 && (u == 'u' || u == 'U') =>
                         // Detect a UNION keyword (possibly followed by ALL or DISTINCT)
                         val end = Math.min(sql.length, i + 5)
-                        if (sql.substring(i, end).toUpperCase(Locale.ROOT) == "UNION") {
+                        if (end - i == 5 && sql.regionMatches(true, i, "UNION", 0, 5)) {
                             val prev = if (i > 0) sql.charAt(i-1) else ' '
                             val after = if (end < sql.length) sql.charAt(end) else ' '
-                            if (!prev.isLetterOrDigit && !after.isLetterOrDigit)
-                                return i
+                            if (!isIdentifierChar(prev) && !isIdentifierChar(after)) {
+                                if (!last)
+                                    return i
+                                lastIndex = i
+                            }
                         }
-                        i += 4
                     case _ =>
                 }
             }
             i += 1
         }
-        -1
+        lastIndex
     }
 }

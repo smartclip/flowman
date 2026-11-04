@@ -98,4 +98,27 @@ class SqlParserTest extends AnyFlatSpec with Matchers {
         val deps = SqlParser.resolveDependencies(sql)
         deps should be(Set("prj/some_mapping:`output`"))
     })
+
+    it should "find top level UNION keywords" in {
+        val cases = Seq(
+            // (sql, first, last)
+            ("SELECT 1 UNION ALL SELECT 2", 9, 9),
+            ("SELECT 1 UNION ALL SELECT 2 UNION DISTINCT SELECT 3", 9, 28),
+            ("(SELECT 1) UNION ALL (SELECT 2)", 11, 11),
+            ("SELECT 'UNION' AS x", -1, -1),
+            ("SELECT 'a''b' UNION ALL SELECT 2", 14, 14),
+            ("SELECT `union` FROM t", -1, -1),
+            ("SELECT n_union FROM t", -1, -1),
+            ("SELECT 1 -- UNION ALL SELECT 2", -1, -1),
+            ("SELECT 1 /* UNION ALL SELECT 2 */", -1, -1),
+            ("SELECT f(1 UNION ALL 2) UNION ALL SELECT 3", 24, 24),
+            ("SELECT 1 UNION_ALL SELECT 2", -1, -1)
+        )
+        cases.foreach { case (sql, first, last) =>
+            withClue(sql) {
+                SqlParser.findTopLevelUnion(sql) should be (first)
+                SqlParser.findTopLevelUnion(sql, last = true) should be (last)
+            }
+        }
+    }
 }
