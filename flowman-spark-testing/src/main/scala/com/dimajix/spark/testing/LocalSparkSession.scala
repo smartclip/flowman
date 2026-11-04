@@ -33,6 +33,23 @@ import LocalSparkSession.logger
 
 object LocalSparkSession {
     private val logger = org.slf4j.LoggerFactory.getLogger(classOf[LocalSparkSession])
+
+    /**
+      * A single embedded Derby metastore shared by all suites of one JVM in Connect mode.
+      *
+      * The in-process Spark Connect server runs on a JVM-wide gRPC thread pool, and Hive caches its
+      * metastore client (and session state) in JVM-wide thread-locals. With a per-suite metastore a
+      * reused gRPC thread could keep talking to the previous suite's Derby database, making tables
+      * created in the current suite invisible. Sharing one metastore for the whole JVM removes that
+      * divergence. (Classic mode keeps one metastore per suite, since Spark creates a new context
+      * and executor threads for every suite anyway.)
+      */
+    private[testing] lazy val sharedMetastorePath : String = {
+        // NOTE: the directory must not exist yet, Derby creates the database directory itself.
+        val dir = new java.io.File(System.getProperty("java.io.tmpdir"), "flowman-metastore-" + java.util.UUID.randomUUID())
+        dir.deleteOnExit()
+        dir.getCanonicalPath
+    }
 }
 
 /**
@@ -94,7 +111,10 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
     override def beforeAll() : Unit = {
         super.beforeAll()
 
-        val localMetastorePath = new File(tempDir, "metastore").getCanonicalPath
+        val localMetastorePath = if (isSparkConnectEnabled)
+            LocalSparkSession.sharedMetastorePath
+        else
+            new File(tempDir, "metastore").getCanonicalPath
         val localWarehousePath = new File(tempDir, "warehouse").getCanonicalPath
         val checkpointPath  = new File(tempDir, "checkpoints").getCanonicalPath
         val streamingCheckpointPath  = new File(tempDir, "streamingCheckpoints").getCanonicalPath
@@ -260,6 +280,16 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
 
         configureSpark(clientBuilder)
 
+        // Spark Connect's `getOrCreate()` returns a stopped-but-still-active session, after which every RPC
+        // fails forever ("Channel shutdown invoked"). A previous suite's client session may still be active
+        // (its shutdown can be asynchronous), so never reuse it - always create a fresh client session. Only
+        // clear a stale Connect session; the classic server session must stay active for the in-process
+        // Connect server to create isolated sessions.
+        val staleConnectSession = SparkSession.getActiveSession.exists(_.getClass.getName == "org.apache.spark.sql.connect.SparkSession")
+        if (staleConnectSession) {
+            SparkSession.clearActiveSession()
+            SparkSession.clearDefaultSession()
+        }
         val spark = clientBuilder.getOrCreate()
 
         _spark = Some(spark)
@@ -289,34 +319,6 @@ trait LocalSparkSession extends LocalTempDir { this:Suite =>
             _sc = None
         }
        if (_serverSpark.nonEmpty) {
-            _serverSpark.foreach { spark =>
-                if (hiveSupported) {
-                    // The gRPC executor threads are shared JVM-wide across suites and keep their datanucleus
-                    // connections bound to the previous suite's embedded Derby database. Shut the Hive metastore
-                    // background thread-pools and the embedded Derby engine down so the next suite's connections
-                    // start fresh.
-                    HiveClientAccessor.withHiveState(spark) {
-                        try {
-                            val clazz = Class.forName("org.apache.hadoop.hive.metastore.ThreadPool")
-                            val method = clazz.getMethod("shutdown")
-                            method.invoke(clazz)
-                        }
-                        catch {
-                            case _:ClassNotFoundException =>
-                            case _:NoSuchMethodException =>
-                        }
-                        try {
-                            Class.forName("org.apache.derby.iapi.jdbc.AutoloadedDriver")
-                            java.sql.DriverManager.getConnection("jdbc:derby:;shutdown=true")
-                        }
-                        catch {
-                            case _:ClassNotFoundException =>
-                            case _:NoSuchMethodException =>
-                            case _:java.sql.SQLException =>
-                        }
-                    }
-                }
-            }
             org.apache.spark.sql.connect.service.SparkConnectService.stop()
             _serverSpark.foreach { spark =>
                 spark.stop()
