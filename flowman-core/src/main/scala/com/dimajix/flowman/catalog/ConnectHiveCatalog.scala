@@ -291,9 +291,35 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
         val tableDefinition = getTable(table)
         require(tableDefinition.tableType != TableType.VIEW)
 
-        // TRUNCATE TABLE is executed on the server and also removes the data of all partitions (and of delta
-        // tables). Deleting the files from the client side would target the wrong file system in a remote setup.
-        spark.sql(s"TRUNCATE TABLE ${table.quotedString}")
+        val isDelta = tableDefinition.provider.exists(_.equalsIgnoreCase("delta"))
+
+        // Hive's TRUNCATE TABLE keeps the partition definitions, so drop them first (this also removes the
+        // partition directories on the server). Delta tables do not keep partition entries in the metastore.
+        if (!isDelta && tableDefinition.partitionColumns.nonEmpty) {
+            listPartitions(table).foreach(p => dropPartition(table, p, false))
+        }
+
+        if (isDelta || !tableDefinition.external) {
+            // TRUNCATE TABLE is not supported for external tables, but works for managed tables and for delta
+            // tables (including external delta tables, which maintain their transaction log).
+            spark.sql(s"TRUNCATE TABLE ${table.quotedString}")
+        }
+
+        // Clean up any remaining (empty) directories. For external tables this is also the only way to remove
+        // the data. If the client cannot access the server's file system, a warning is logged and the data may
+        // remain on the server.
+        if (!isDelta) {
+            tableDefinition.location.foreach { location =>
+                try {
+                    val fs = location.getFileSystem(hadoopConf)
+                    HadoopUtils.truncateLocation(fs, location)
+                }
+                catch {
+                    case NonFatal(ex) =>
+                        logger.warn(s"Could not truncate location $location of table $table from the client: ${ex.getMessage}")
+                }
+            }
+        }
 
         refreshTable(table)
     }

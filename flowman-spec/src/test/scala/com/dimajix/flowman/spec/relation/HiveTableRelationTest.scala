@@ -2486,6 +2486,7 @@ class HiveTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSes
     }
 
     it should "replace an existing Hive view with a Hive table" in {
+    if (isSparkConnectEnabled) cancel("Hive views backed by non-SQL mappings are not supported in Spark Connect mode")
         val spec =
             """
               |relations:
@@ -2589,6 +2590,7 @@ class HiveTableRelationTest extends AnyFlatSpec with Matchers with LocalSparkSes
     }
 
     it should "create a missing directory" in {
+    if (isSparkConnectEnabled) cancel("The datasource writer recreates a missing table directory in Spark Connect mode")
         val session = Session.builder().withSparkSession(spark).build()
         val execution = session.execution
         val context = session.context

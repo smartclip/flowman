@@ -65,6 +65,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
 
 
     "A HiveViewRelation" should "be creatable from a mapping" in {
+    if (isSparkConnectEnabled) cancel("Hive views backed by non-SQL mappings are not supported in Spark Connect mode")
+
     val spec =
       """
         |relations:
@@ -165,6 +167,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
   }
 
   it should "work with non-trivial mappings" in {
+    if (isSparkConnectEnabled) cancel("Hive views backed by non-SQL mappings are not supported in Spark Connect mode")
+
     val spec =
       """
         |relations:
@@ -373,6 +377,8 @@ class HiveViewRelationTest extends AnyFlatSpec with Matchers with LocalSparkSess
     }
 
     it should "replace an existing Hive table with a Hive view" in {
+    if (isSparkConnectEnabled) cancel("Hive views backed by non-SQL mappings are not supported in Spark Connect mode")
+
         val spec =
             """
               |relations:
