@@ -31,7 +31,6 @@ import scala.util.control.NonFatal
 import com.dimajix.common.MapIgnoreCase
 import com.dimajix.common.SetIgnoreCase
 import com.dimajix.flowman.config.Configuration
-import com.dimajix.flowman.fs.HadoopUtils
 import com.dimajix.flowman.model.PartitionField
 import com.dimajix.flowman.model.PartitionSchema
 import com.dimajix.flowman.types.DateType
@@ -271,7 +270,7 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
                 try {
                     val fs = location.getFileSystem(hadoopConf)
                     if (fs.exists(location))
-                        HadoopUtils.deleteLocation(fs, location)
+                        fs.delete(location, true)
                 }
                 catch {
                     case NonFatal(ex) =>
@@ -312,7 +311,8 @@ final class ConnectHiveCatalog(val spark:SparkSession, val config:Configuration)
             tableDefinition.location.foreach { location =>
                 try {
                     val fs = location.getFileSystem(hadoopConf)
-                    HadoopUtils.truncateLocation(fs, location)
+                    if (fs.exists(location))
+                        fs.listStatus(location).foreach(status => fs.delete(status.getPath, true))
                 }
                 catch {
                     case NonFatal(ex) =>

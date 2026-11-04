@@ -36,27 +36,33 @@ class FlowmanConnectMessagesTest extends AnyFlatSpec with Matchers {
     it should "round-trip FlowmanCountRecords" in {
         val msg = FlowmanCountRecords(Array[Byte](1,2,3,4))
         val decoded = FlowmanConnectCodec.decode(msg.typeUrl, msg.toBytes)
-        decoded should be (msg)
-        decoded.asInstanceOf[FlowmanCountRecords].input should be (Array[Byte](1,2,3,4))
+        decoded shouldBe a[FlowmanCountRecords]
+        decoded.asInstanceOf[FlowmanCountRecords].input.toSeq should be (Seq[Byte](1,2,3,4))
     }
 
     it should "round-trip FlowmanDescribe" in {
         val msg = FlowmanDescribe(Array[Byte](9,8,7))
         val decoded = FlowmanConnectCodec.decode(msg.typeUrl, msg.toBytes)
-        decoded should be (msg)
+        decoded shouldBe a[FlowmanDescribe]
+        decoded.asInstanceOf[FlowmanDescribe].input.toSeq should be (Seq[Byte](9,8,7))
     }
 
     it should "round-trip FlowmanNullableStruct" in {
         val msg = FlowmanNullableStruct(Seq("a", "b"), Seq(Array[Byte](1), Array[Byte](2,2)))
         val decoded = FlowmanConnectCodec.decode(msg.typeUrl, msg.toBytes)
-        decoded should be (msg)
-        decoded.asInstanceOf[FlowmanNullableStruct].children should be (Seq(Array[Byte](1), Array[Byte](2,2)))
+        decoded shouldBe a[FlowmanNullableStruct]
+        val struct = decoded.asInstanceOf[FlowmanNullableStruct]
+        struct.names should be (Seq("a", "b"))
+        struct.children.map(_.toSeq) should be (Seq(Seq[Byte](1), Seq[Byte](2,2)))
     }
 
     it should "round-trip FlowmanNullableStruct with unicode strings" in {
         val msg = FlowmanNullableStruct(Seq("straße", "日本語"), Seq(Array[Byte]()))
         val decoded = FlowmanConnectCodec.decode(msg.typeUrl, msg.toBytes)
-        decoded should be (msg)
+        decoded shouldBe a[FlowmanNullableStruct]
+        val struct = decoded.asInstanceOf[FlowmanNullableStruct]
+        struct.names should be (Seq("straße", "日本語"))
+        struct.children.map(_.toSeq) should be (Seq(Seq.empty[Byte]))
     }
 
     it should "round-trip FlowmanPing" in {
@@ -86,5 +92,24 @@ class FlowmanConnectMessagesTest extends AnyFlatSpec with Matchers {
     it should "reject unknown message types" in {
         an [IllegalArgumentException] should be thrownBy
             FlowmanConnectCodec.decode("dimajix.flowman.connect.v1.UnknownMessage", Array.emptyByteArray)
+    }
+
+    it should "reject negative and oversized field lengths" in {
+        // field 1, wire type 2 (length-delimited), length varint -1 (0xffffffffffffffff)
+        val negativeLength = Array[Byte](0x0a, 0xff.toByte, 0xff.toByte, 0xff.toByte, 0xff.toByte,
+            0xff.toByte, 0xff.toByte, 0xff.toByte, 0xff.toByte, 0xff.toByte, 0x01)
+        an [IllegalArgumentException] should be thrownBy
+            FlowmanConnectCodec.decode("dimajix.flowman.connect.v1.FlowmanDescribe", negativeLength)
+
+        // field 1, wire type 2, declared length 100 but only 3 bytes of payload
+        val oversized = Array[Byte](0x0a, 100, 1, 2, 3)
+        an [IllegalArgumentException] should be thrownBy
+            FlowmanConnectCodec.decode("dimajix.flowman.connect.v1.FlowmanDescribe", oversized)
+    }
+
+    it should "reject truncated varints" in {
+        val truncated = Array[Byte](0x0a, 0x80.toByte)
+        an [IllegalArgumentException] should be thrownBy
+            FlowmanConnectCodec.decode("dimajix.flowman.connect.v1.FlowmanDescribe", truncated)
     }
 }
