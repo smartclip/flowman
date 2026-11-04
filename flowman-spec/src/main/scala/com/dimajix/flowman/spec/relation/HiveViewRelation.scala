@@ -282,7 +282,8 @@ final case class HiveViewRelation(
     private def buildMappingSql(executor: Execution, output:MappingOutputIdentifier) : String = {
         val mapping = context.getMapping(output.mapping)
         if (executor.backend.isConnect) {
-            // A Spark Connect client cannot access `df.queryExecution` to serialize the analyzed SQL plan.
+            // A Spark Connect client cannot access the query execution of a DataFrame to serialize the
+            // analyzed SQL plan.
             // Only mappings backed by an explicit SQL statement can be turned into a (live) Hive view; any
             // other mapping would have to be materialized as a snapshot table, which silently changes the
             // semantics and would share a single table name between all views.
